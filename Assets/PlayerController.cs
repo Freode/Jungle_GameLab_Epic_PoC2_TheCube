@@ -450,6 +450,10 @@ public class PlayerController : MonoBehaviour
         {
             selectedUnits.Remove(unit);
             unit.ToggleSelection(false);
+            if (currentFormationGroup != null)
+            {
+                currentFormationGroup.units.Remove(unit);
+            }
         }
     }
 
@@ -461,6 +465,7 @@ public class PlayerController : MonoBehaviour
         }
         selectedUnits.Clear();
         BreakFormation(false);
+        currentMode = FormationMode.None;
     }
 
     void BreakFormation(bool forNewFormation = false)
@@ -539,7 +544,6 @@ public class PlayerController : MonoBehaviour
             currentFormationGroup = null;
         }
         formationSlots.Clear();
-        currentMode = FormationMode.None;
 
         if (lineDrawer != null)
         {

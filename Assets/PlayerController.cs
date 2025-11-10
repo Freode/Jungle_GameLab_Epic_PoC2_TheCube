@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.AI;
+using System.Linq;
 
 public enum FormationMode { None, Mode2D, Mode3D, LadderMode }
 
@@ -30,10 +31,11 @@ public class PlayerController : MonoBehaviour
 
     private FormationMode currentMode = FormationMode.None;
     private List<FormationSlot> formationSlots = new List<FormationSlot>();
-    private FormationGroup currentFormationGroup; // Keeps track of the group of units in a formation
+    private FormationGroup currentFormationGroup;
+    private GameObject currentFormationParent;
+    private bool isSwitchingFormation = false;
 
-    // Constants for 3D formation shapes
-    private const float CUBE_SIZE = 1.0f; // This should match the scale of your unit cubes.
+    private const float CUBE_SIZE = 1.0f;
 
     void Awake()
     {
@@ -71,6 +73,8 @@ public class PlayerController : MonoBehaviour
 
     void Update()
     {
+        if (isSwitchingFormation) return;
+
         if (Mouse.current.leftButton.wasPressedThisFrame)
         {
             startDrag = Mouse.current.position.ReadValue();
@@ -91,38 +95,54 @@ public class PlayerController : MonoBehaviour
             MoveSelectedUnits();
         }
         
-        // 2D Formation mode toggle
         if (Keyboard.current.digit1Key.wasPressedThisFrame)
         {
             if (selectedUnits.Count > 0)
             {
-                BreakFormation(true);
-                currentMode = FormationMode.Mode2D;
-                UpdateFormation();
+                StartCoroutine(SwitchFormation(FormationMode.Mode2D));
             }
         }
         
-        // 3D Formation mode toggle
         if (Keyboard.current.digit2Key.wasPressedThisFrame)
         {
-            if (selectedUnits.Count > 1) // 3D mode requires at least 2 units
+            if (selectedUnits.Count > 1)
             {
-                BreakFormation(true);
-                currentMode = FormationMode.Mode3D;
-                Update3DFormation();
+                StartCoroutine(SwitchFormation(FormationMode.Mode3D));
             }
         }
         
-        // Ladder Formation mode toggle
         if (Keyboard.current.digit3Key.wasPressedThisFrame)
         {
             if (selectedUnits.Count > 0)
             {
-                BreakFormation(true);
-                currentMode = FormationMode.LadderMode;
-                UpdateLadderFormation();
+                StartCoroutine(SwitchFormation(FormationMode.LadderMode));
             }
         }
+    }
+
+    IEnumerator SwitchFormation(FormationMode newMode)
+    {
+        if (isSwitchingFormation || currentMode == newMode) yield break;
+
+        isSwitchingFormation = true;
+
+        yield return StartCoroutine(BreakFormation(true, newMode));
+
+        currentMode = newMode;
+        switch (newMode)
+        {
+            case FormationMode.Mode2D:
+                UpdateFormation();
+                break;
+            case FormationMode.Mode3D:
+                Update3DFormation();
+                break;
+            case FormationMode.LadderMode:
+                UpdateLadderFormation();
+                break;
+        }
+
+        isSwitchingFormation = false;
     }
 
     void UpdateFormation()
@@ -136,7 +156,6 @@ public class PlayerController : MonoBehaviour
         foreach (Unit unit in selectedUnits)
         {
             center += unit.transform.position;
-            unit.formationGroup = currentFormationGroup;
         }
         center /= selectedUnits.Count;
 
@@ -175,15 +194,10 @@ public class PlayerController : MonoBehaviour
         lineDrawer.DrawLines(selectedUnits);
     }
 
-    void Update3DFormation()
+    List<Vector3> Get3DFormationOffsets(int count)
     {
-        if (selectedUnits.Count < 2) return;
-
-        currentFormationGroup = new FormationGroup();
-        currentFormationGroup.units.AddRange(selectedUnits);
-
         List<Vector3> offsets = new List<Vector3>();
-        switch (selectedUnits.Count)
+        switch (count)
         {
             case 2:
                 offsets.Add(new Vector3(-CUBE_SIZE / 2, 0, 0));
@@ -227,39 +241,67 @@ public class PlayerController : MonoBehaviour
                 offsets.Add(new Vector3(-CUBE_SIZE / 2, CUBE_SIZE, CUBE_SIZE / 2)); offsets.Add(new Vector3(CUBE_SIZE / 2, CUBE_SIZE, CUBE_SIZE / 2));
                 break;
         }
+        return offsets;
+    }
 
-        Vector3 formationCurrentCenter = Vector3.zero;
+    IEnumerator MoveToLocalPosition(Transform target, Vector3 localPosition, float duration)
+    {
+        float time = 0;
+        Vector3 startPosition = target.localPosition;
+        while (time < duration)
+        {
+            target.localPosition = Vector3.Lerp(startPosition, localPosition, time / duration);
+            time += Time.deltaTime;
+            yield return null;
+        }
+        target.localPosition = localPosition;
+    }
+
+    void Update3DFormation()
+    {
+        if (selectedUnits.Count < 2) return;
+
+        Vector3 formationCenter = Vector3.zero;
         foreach (Unit unit in selectedUnits)
         {
-            formationCurrentCenter += unit.transform.position;
+            formationCenter += unit.transform.position;
         }
-        formationCurrentCenter /= selectedUnits.Count;
-        formationCurrentCenter.y = CUBE_SIZE / 2.0f;
+        formationCenter /= selectedUnits.Count;
 
-        Unit leaderUnit = selectedUnits[0];
-        leaderUnit.IsLeader = true;
-        leaderUnit.EnableNavMeshAgent(true);
-        leaderUnit.SetNavMeshAgentControl(true);
+        currentFormationParent = new GameObject("FormationParent");
+        currentFormationParent.transform.position = formationCenter;
+        
+        NavMeshAgent parentAgent = currentFormationParent.AddComponent<NavMeshAgent>();
+        if (selectedUnits.Count > 0 && selectedUnits[0] != null)
+        {
+            NavMeshAgent firstUnitAgent = selectedUnits[0].GetComponent<NavMeshAgent>();
+            parentAgent.speed = firstUnitAgent.speed;
+            parentAgent.angularSpeed = firstUnitAgent.angularSpeed;
+            parentAgent.acceleration = firstUnitAgent.acceleration;
+            parentAgent.stoppingDistance = firstUnitAgent.stoppingDistance;
+            parentAgent.radius = firstUnitAgent.radius;
+        }
+
+        List<Vector3> offsets = Get3DFormationOffsets(selectedUnits.Count);
 
         for (int i = 0; i < selectedUnits.Count; i++)
         {
             Unit unit = selectedUnits[i];
-            unit.formationGroup = currentFormationGroup;
+            Vector3 offset = offsets[i];
 
-            if (unit != leaderUnit)
+            if (Mathf.Approximately(offset.y, 0))
             {
-                unit.EnableNavMeshAgent(false);
-                unit.SetNavMeshAgentControl(false);
-                
-                Vector3 offsetFromLeader = offsets[i] - offsets[selectedUnits.IndexOf(leaderUnit)];
-                unit.SetLeader(leaderUnit, offsetFromLeader);
+                offset.y += CUBE_SIZE / 2.0f;
             }
+
+            unit.StopAllCoroutines();
+            unit.EnableNavMeshAgent(false);
+            unit.transform.parent = currentFormationParent.transform;
             
-            Vector3 targetPos = formationCurrentCenter + offsets[i];
-            unit.MoveTo(targetPos, 3f);
+            StartCoroutine(MoveToLocalPosition(unit.transform, offset, 0.5f));
+
             unit.LockRotation();
-            unit.transform.rotation = Quaternion.identity;
-            formationSlots.Add(new FormationSlot { unit = unit, offset = offsets[i], rotation = Quaternion.identity });
+            unit.transform.localRotation = Quaternion.identity;
         }
     }
 
@@ -267,42 +309,41 @@ public class PlayerController : MonoBehaviour
     {
         if (selectedUnits.Count < 1) return;
 
-        currentFormationGroup = new FormationGroup();
-        currentFormationGroup.units.AddRange(selectedUnits);
-
-        Vector3 formationCurrentCenter = Vector3.zero;
+        Vector3 formationCenter = Vector3.zero;
         foreach (Unit unit in selectedUnits)
         {
-            formationCurrentCenter += unit.transform.position;
+            formationCenter += unit.transform.position;
         }
-        formationCurrentCenter /= selectedUnits.Count;
-        formationCurrentCenter.y = CUBE_SIZE / 2.0f;
+        formationCenter /= selectedUnits.Count;
+        formationCenter.y = 0.0f; // Set parent to ground level
 
-        Unit leaderUnit = selectedUnits[0];
-        leaderUnit.IsLeader = true;
-        leaderUnit.EnableNavMeshAgent(true);
-        leaderUnit.SetNavMeshAgentControl(true);
+        currentFormationParent = new GameObject("LadderParent");
+        currentFormationParent.transform.position = formationCenter;
+        
+        NavMeshAgent parentAgent = currentFormationParent.AddComponent<NavMeshAgent>();
+        if (selectedUnits.Count > 0 && selectedUnits[0] != null)
+        {
+            NavMeshAgent firstUnitAgent = selectedUnits[0].GetComponent<NavMeshAgent>();
+            parentAgent.speed = firstUnitAgent.speed;
+            parentAgent.angularSpeed = firstUnitAgent.angularSpeed;
+            parentAgent.acceleration = firstUnitAgent.acceleration;
+            parentAgent.stoppingDistance = firstUnitAgent.stoppingDistance;
+            parentAgent.radius = firstUnitAgent.radius;
+        }
 
-        formationSlots.Clear();
         for (int i = 0; i < selectedUnits.Count; i++)
         {
             Unit unit = selectedUnits[i];
-            unit.formationGroup = currentFormationGroup;
+            Vector3 offset = new Vector3(0, (i * CUBE_SIZE) + (CUBE_SIZE / 2.0f), 0);
 
-            Vector3 offset = new Vector3(0, i * CUBE_SIZE, 0);
+            unit.StopAllCoroutines();
+            unit.EnableNavMeshAgent(false);
+            unit.transform.parent = currentFormationParent.transform;
             
-            if (unit != leaderUnit)
-            {
-                unit.EnableNavMeshAgent(false);
-                unit.SetNavMeshAgentControl(false);
-                unit.SetLeader(leaderUnit, offset); 
-            }
-            
-            Vector3 targetPos = formationCurrentCenter + offset;
-            unit.MoveTo(targetPos, 2f);
+            StartCoroutine(MoveToLocalPosition(unit.transform, offset, 0.5f));
+
             unit.LockRotation();
-            unit.transform.rotation = Quaternion.identity;
-            formationSlots.Add(new FormationSlot { unit = unit, offset = offset, rotation = Quaternion.identity });
+            unit.transform.localRotation = Quaternion.identity;
         }
     }
 
@@ -314,32 +355,32 @@ public class PlayerController : MonoBehaviour
 
         if (Physics.Raycast(ray, out hit))
         {
-            if (currentMode == FormationMode.Mode2D)
+            if (currentMode == FormationMode.Mode3D || currentMode == FormationMode.LadderMode)
+            {
+                if (currentFormationParent != null)
+                {
+                    NavMeshAgent parentAgent = currentFormationParent.GetComponent<NavMeshAgent>();
+                    if (parentAgent != null)
+                    {
+                        parentAgent.SetDestination(hit.point);
+                    }
+                }
+            }
+            else if (currentMode == FormationMode.Mode2D)
             {
                 Vector3 newCenter = hit.point;
                 foreach (var slot in formationSlots)
                 {
+                    if (slot.unit == null) continue;
                     Vector3 targetPos = newCenter + slot.offset;
                     slot.unit.MoveTo(targetPos);
                     slot.unit.transform.rotation = slot.rotation;
                 }
             }
-            else if (currentMode == FormationMode.Mode3D || currentMode == FormationMode.LadderMode)
-            {
-                Vector3 newTargetForLeader = hit.point;
-                newTargetForLeader.y = CUBE_SIZE / 2.0f; 
-
-                Unit leader = selectedUnits.Find(u => u.IsLeader);
-                if (leader == null && selectedUnits.Count > 0) leader = selectedUnits[0];
-
-                if (leader != null)
-                {
-                    leader.MoveTo(newTargetForLeader);
-                }
-            }
             else
             {
                 int unitCount = selectedUnits.Count;
+                if (unitCount == 0) return;
                 float angle = 360f / unitCount;
                 float radius = 1f;
 
@@ -354,8 +395,36 @@ public class PlayerController : MonoBehaviour
         }
     }
 
+    IEnumerator RebuildCurrentFormation()
+    {
+        if (isSwitchingFormation) yield break;
+        
+        isSwitchingFormation = true;
+
+        FormationMode modeToRebuild = currentMode;
+        yield return StartCoroutine(BreakFormation(true, modeToRebuild));
+
+        currentMode = modeToRebuild;
+        switch (currentMode)
+        {
+            case FormationMode.Mode2D:
+                if (selectedUnits.Count > 0) UpdateFormation();
+                break;
+            case FormationMode.Mode3D:
+                if (selectedUnits.Count > 1) Update3DFormation();
+                break;
+            case FormationMode.LadderMode:
+                if (selectedUnits.Count > 0) UpdateLadderFormation();
+                break;
+        }
+        
+        isSwitchingFormation = false;
+    }
+
     void HandleSingleSelection()
     {
+        var preSelection = new HashSet<Unit>(selectedUnits);
+
         Ray ray = cam.ScreenPointToRay(Mouse.current.position.ReadValue());
         RaycastHit hit;
         if (Physics.Raycast(ray, out hit))
@@ -363,7 +432,11 @@ public class PlayerController : MonoBehaviour
             Unit unit = hit.collider.GetComponent<Unit>();
             if (unit != null)
             {
-                if (!Keyboard.current.shiftKey.isPressed && !Keyboard.current.leftCtrlKey.isPressed) ClearSelection();
+                if (!Keyboard.current.shiftKey.isPressed && !Keyboard.current.leftCtrlKey.isPressed)
+                {
+                    ClearSelection();
+                }
+                
                 if (selectedUnits.Contains(unit))
                 {
                     if (Keyboard.current.leftCtrlKey.isPressed) DeselectUnit(unit);
@@ -380,20 +453,17 @@ public class PlayerController : MonoBehaviour
             if (!Keyboard.current.shiftKey.isPressed && !Keyboard.current.leftCtrlKey.isPressed) ClearSelection();
         }
 
-        if (currentMode == FormationMode.Mode2D && selectedUnits.Count > 0)
+        var postSelection = new HashSet<Unit>(selectedUnits);
+        if (!preSelection.SetEquals(postSelection) && currentMode != FormationMode.None)
         {
-            BreakFormation(true);
-            UpdateFormation();
-        }
-        else if (currentMode == FormationMode.Mode3D && selectedUnits.Count > 1)
-        {
-            BreakFormation(true);
-            Update3DFormation();
+            StartCoroutine(RebuildCurrentFormation());
         }
     }
 
     void HandleDragSelection()
     {
+        var preSelection = new HashSet<Unit>(selectedUnits);
+
         if (!Keyboard.current.shiftKey.isPressed && !Keyboard.current.leftCtrlKey.isPressed)
         {
             ClearSelection();
@@ -423,15 +493,11 @@ public class PlayerController : MonoBehaviour
                 else SelectUnit(unit);
             }
         }
-        if (currentMode == FormationMode.Mode2D && selectedUnits.Count > 0)
+        
+        var postSelection = new HashSet<Unit>(selectedUnits);
+        if (!preSelection.SetEquals(postSelection) && currentMode != FormationMode.None)
         {
-            BreakFormation(true);
-            UpdateFormation();
-        }
-        else if (currentMode == FormationMode.Mode3D && selectedUnits.Count > 1)
-        {
-            BreakFormation(true);
-            Update3DFormation();
+            StartCoroutine(RebuildCurrentFormation());
         }
     }
 
@@ -459,81 +525,124 @@ public class PlayerController : MonoBehaviour
 
     void ClearSelection()
     {
+        if (selectedUnits.Count == 0 && currentMode == FormationMode.None) return;
+        
         foreach (Unit unit in selectedUnits)
         {
             unit.ToggleSelection(false);
         }
         selectedUnits.Clear();
-        BreakFormation(false);
-        currentMode = FormationMode.None;
+        StartCoroutine(BreakFormation(true, FormationMode.None));
     }
 
-    void BreakFormation(bool forNewFormation = false)
+    private void TeleportAndResetUnits(List<Unit> unitsToReset, Vector3 center)
     {
-        if (currentMode == FormationMode.None) return;
-
-        List<Unit> unitsToProcess = new List<Unit>();
-        if (currentFormationGroup != null)
+        for (int i = 0; i < unitsToReset.Count; i++)
         {
-            unitsToProcess.AddRange(currentFormationGroup.units);
+            Unit unit = unitsToReset[i];
+            if (unit == null) continue;
+            float angleRad = Mathf.Deg2Rad * (360f / unitsToReset.Count * i);
+            Vector3 scatterTarget = center + new Vector3(Mathf.Cos(angleRad), 0, Mathf.Sin(angleRad)) * 1.5f;
+            
+            unit.StopAllCoroutines();
+            unit.transform.position = scatterTarget;
+            unit.EnableNavMeshAgent(true);
+            unit.SetNavMeshAgentControl(true);
+            unit.UnlockRotation();
+            unit.ClearLeader();
+            unit.IsLeader = false;
+            unit.formationGroup = null;
         }
+    }
 
-        if (currentMode == FormationMode.Mode3D || currentMode == FormationMode.LadderMode)
+    IEnumerator BreakFormation(bool animate, FormationMode nextMode = FormationMode.None)
+    {
+        FormationMode modeToBreak = currentMode;
+        currentMode = FormationMode.None;
+
+        if (modeToBreak == FormationMode.Mode3D || modeToBreak == FormationMode.LadderMode)
         {
-            if (forNewFormation)
+            if (currentFormationParent != null)
             {
-                foreach (Unit unit in unitsToProcess)
+                List<Unit> unitsToBreak = new List<Unit>();
+                foreach (Transform child in currentFormationParent.transform)
                 {
-                    if (unit == null) continue;
-                    unit.StopAllCoroutines();
-                    Vector3 groundPos = new Vector3(unit.transform.position.x, 0.5f, unit.transform.position.z);
-                    unit.transform.position = groundPos;
+                    Unit unit = child.GetComponent<Unit>();
+                    if (unit != null) unitsToBreak.Add(unit);
+                }
+
+                foreach (var unit in unitsToBreak) unit.transform.parent = null;
+                Destroy(currentFormationParent);
+                currentFormationParent = null;
+
+                Vector3 center = Vector3.zero;
+                if (unitsToBreak.Count > 0)
+                {
+                    foreach(var unit in unitsToBreak) center += unit.transform.position;
+                    center /= unitsToBreak.Count;
+                }
+                center.y = 0.0f; // Calculate center based on ground plane for consistency
+
+                // Skip animation if the next mode is LadderMode
+                bool useAnimation = animate && nextMode != FormationMode.LadderMode;
+
+                if (useAnimation)
+                {
+                    List<Coroutine> runningBreaks = new List<Coroutine>();
                     
-                    unit.EnableNavMeshAgent(true);
-                    unit.SetNavMeshAgentControl(true);
-                    unit.UnlockRotation();
-                    unit.ClearLeader();
-                    unit.IsLeader = false;
-                    unit.formationGroup = null;
+                    // Special Case: Ladder -> 3D transition, scatter to final positions
+                    if (modeToBreak == FormationMode.LadderMode && nextMode == FormationMode.Mode3D)
+                    {
+                        List<Vector3> futureOffsets = Get3DFormationOffsets(unitsToBreak.Count);
+                        for (int i = 0; i < unitsToBreak.Count; i++)
+                        {
+                            Unit unit = unitsToBreak[i];
+                            if (unit == null) continue;
+
+                            Vector3 finalOffset = futureOffsets[i];
+                            if (Mathf.Approximately(finalOffset.y, 0))
+                            {
+                                finalOffset.y += CUBE_SIZE / 2.0f;
+                            }
+                            
+                            Vector3 scatterTarget = center + finalOffset;
+                            runningBreaks.Add(StartCoroutine(unit.FallAndScatter(scatterTarget, 4f)));
+                        }
+                    }
+                    else // Default circular scatter
+                    {
+                        for (int i = 0; i < unitsToBreak.Count; i++)
+                        {
+                            Unit unit = unitsToBreak[i];
+                            if (unit == null) continue;
+                            float angleRad = Mathf.Deg2Rad * (360f / unitsToBreak.Count * i);
+                            Vector3 scatterTarget = center + new Vector3(Mathf.Cos(angleRad), CUBE_SIZE / 2.0f, Mathf.Sin(angleRad)) * 1.5f;
+                            runningBreaks.Add(StartCoroutine(unit.FallAndScatter(scatterTarget, 4f)));
+                        }
+                    }
+
+                    foreach (var coroutine in runningBreaks)
+                    {
+                        yield return coroutine;
+                    }
+                }
+                else
+                {
+                    TeleportAndResetUnits(unitsToBreak, center);
                 }
             }
-            else
-            {
-                Vector3 formationCenter = Vector3.zero;
-                if (unitsToProcess.Count > 0)
-                {
-                    foreach(var unit in unitsToProcess) formationCenter += unit.transform.position;
-                    formationCenter /= unitsToProcess.Count;
-                }
-                formationCenter.y = 0.5f;
-
-                float scatterDistance = 1.0f;
-                int unitCount = unitsToProcess.Count;
-                if (unitCount == 0) return;
-                float angleIncrement = 360f / unitCount;
-
-                for (int i = 0; i < unitCount; i++)
-                {
-                    Unit unit = unitsToProcess[i];
-                    if (unit == null) continue;
-                    
-                    float angleRad = Mathf.Deg2Rad * (angleIncrement * i);
-                    float x = Mathf.Cos(angleRad) * scatterDistance;
-                    float z = Mathf.Sin(angleRad) * scatterDistance;
-                    Vector3 scatterTarget = formationCenter + new Vector3(x, 0, z);
-
-                    StartCoroutine(unit.FallAndScatter(scatterTarget, 4f));
-                }
-            }
         }
-        else if (currentMode == FormationMode.Mode2D)
+        else if (modeToBreak == FormationMode.Mode2D)
         {
-            foreach (Unit unit in unitsToProcess)
+            if (currentFormationGroup != null)
             {
-                if (unit != null)
+                foreach (var unit in currentFormationGroup.units)
                 {
-                    unit.UnlockRotation();
-                    unit.formationGroup = null;
+                    if (unit != null)
+                    {
+                        unit.UnlockRotation();
+                        unit.formationGroup = null;
+                    }
                 }
             }
         }
@@ -544,10 +653,6 @@ public class PlayerController : MonoBehaviour
             currentFormationGroup = null;
         }
         formationSlots.Clear();
-
-        if (lineDrawer != null)
-        {
-            lineDrawer.ClearLines();
-        }
+        if (lineDrawer != null) lineDrawer.ClearLines();
     }
 }

@@ -60,15 +60,18 @@ public class Unit : MonoBehaviour
 
     private IEnumerator ResetSpeedAfterArrival()
     {
-        // Wait until the agent is close to the destination
-        while (agent.pathPending || agent.remainingDistance > agent.stoppingDistance + 0.1f)
+        // Wait until the agent is close to the destination, but exit if the agent gets disabled.
+        while (agent.enabled && (agent.pathPending || agent.remainingDistance > agent.stoppingDistance + 0.1f))
         {
             yield return null;
         }
 
-        // Reset speed and acceleration
-        agent.speed = originalSpeed;
-        agent.acceleration = originalAcceleration;
+        // Only reset speed if the agent is still enabled and has reached its destination.
+        if (agent.enabled)
+        {
+            agent.speed = originalSpeed;
+            agent.acceleration = originalAcceleration;
+        }
     }
 
     public void RotateTo(Vector3 direction)
@@ -114,6 +117,40 @@ public class Unit : MonoBehaviour
         agent.updateRotation = enable;
     }
 
+    public IEnumerator FallAndScatter(Vector3 targetPosition, float speedMultiplier)
+    {
+        EnableNavMeshAgent(false); // Ensure NavMeshAgent is disabled for direct transform manipulation
+        SetNavMeshAgentControl(false);
+
+        float currentSpeed = originalSpeed * speedMultiplier;
+        
+        // Create a ground target position directly below the unit
+        Vector3 groundTarget = new Vector3(transform.position.x, 0.5f, transform.position.z); // Assuming cube pivot is center, 0.5f is ground level
+
+        // Fall to the ground first
+        while (Vector3.Distance(transform.position, groundTarget) > 0.05f)
+        {
+            transform.position = Vector3.MoveTowards(transform.position, groundTarget, currentSpeed * 2 * Time.deltaTime); // Fall faster
+            yield return null;
+        }
+        transform.position = groundTarget;
+
+        // Then move to the final scatter position on the ground
+        while (Vector3.Distance(transform.position, targetPosition) > 0.05f)
+        {
+            transform.position = Vector3.MoveTowards(transform.position, targetPosition, currentSpeed * Time.deltaTime);
+            yield return null;
+        }
+        transform.position = targetPosition;
+
+        // Once scattered, re-enable NavMeshAgent
+        EnableNavMeshAgent(true);
+        SetNavMeshAgentControl(true);
+        UnlockRotation();
+        ClearLeader();
+        IsLeader = false;
+    }
+
     public bool IsLeader { get; set; } = false;
     private Unit _leader;
     private Vector3 _offsetFromLeader; // Offset from leader's position
@@ -135,9 +172,12 @@ public class Unit : MonoBehaviour
     {
         if (!agent.enabled && _leader != null) // If NavMeshAgent is disabled and we have a leader
         {
+            // Rotate the offset by the leader's current rotation
+            Vector3 rotatedOffset = _leader.transform.rotation * _offsetFromLeader;
             // Move towards the target position relative to the leader
-            Vector3 targetPosition = _leader.transform.position + _offsetFromLeader;
-            transform.position = Vector3.MoveTowards(transform.position, targetPosition, originalSpeed * Time.deltaTime);
+            Vector3 targetPosition = _leader.transform.position + rotatedOffset;
+            transform.position = Vector3.MoveTowards(transform.position, targetPosition, originalSpeed * 2f * Time.deltaTime); // Move faster to keep up
+            transform.rotation = Quaternion.RotateTowards(transform.rotation, _leader.transform.rotation, agent.angularSpeed * Time.deltaTime); // Match leader's rotation
         }
     }
 }

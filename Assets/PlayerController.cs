@@ -2,8 +2,9 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.AI;
 
-public enum FormationMode { None, Mode2D, Mode3D }
+public enum FormationMode { None, Mode2D, Mode3D, LadderMode }
 
 public class FormationSlot
 {
@@ -95,6 +96,7 @@ public class PlayerController : MonoBehaviour
         {
             if (selectedUnits.Count > 0)
             {
+                BreakFormation(true);
                 currentMode = FormationMode.Mode2D;
                 UpdateFormation();
             }
@@ -105,24 +107,28 @@ public class PlayerController : MonoBehaviour
         {
             if (selectedUnits.Count > 1) // 3D mode requires at least 2 units
             {
+                BreakFormation(true);
                 currentMode = FormationMode.Mode3D;
                 Update3DFormation();
+            }
+        }
+        
+        // Ladder Formation mode toggle
+        if (Keyboard.current.digit3Key.wasPressedThisFrame)
+        {
+            if (selectedUnits.Count > 0)
+            {
+                BreakFormation(true);
+                currentMode = FormationMode.LadderMode;
+                UpdateLadderFormation();
             }
         }
     }
 
     void UpdateFormation()
     {
-        if (selectedUnits.Count < 1 || currentMode != FormationMode.Mode2D)
-        {
-            BreakFormation();
-            return;
-        }
+        if (selectedUnits.Count < 1) return;
 
-        BreakFormation(); // Reset previous formation state
-        currentMode = FormationMode.Mode2D; // Ensure correct mode is set
-
-        // Assign a new FormationGroup
         currentFormationGroup = new FormationGroup();
         currentFormationGroup.units.AddRange(selectedUnits);
 
@@ -134,7 +140,6 @@ public class PlayerController : MonoBehaviour
         }
         center /= selectedUnits.Count;
 
-        // If only 1 or 2 units, don't form a polygon, just group loosely
         if (selectedUnits.Count < 2) 
         {
             foreach (Unit unit in selectedUnits)
@@ -148,11 +153,11 @@ public class PlayerController : MonoBehaviour
 
         const float baseSideLength = 3.0f;
         int unitCount = selectedUnits.Count;
-        float desiredSideLength = baseSideLength + (unitCount * 0.2f); // Side length grows with more units
-        float radius = desiredSideLength / (2 * Mathf.Sin(Mathf.PI / unitCount)); // Calculate radius from side length
+        float desiredSideLength = baseSideLength + (unitCount * 0.2f);
+        float radius = desiredSideLength / (2 * Mathf.Sin(Mathf.PI / unitCount));
         float angleIncrement = 360f / unitCount;
 
-        formationSlots.Clear(); // Clear slots for new calculation
+        formationSlots.Clear();
         for (int i = 0; i < unitCount; i++)
         {
             float angleRad = Mathf.Deg2Rad * (angleIncrement * i);
@@ -162,7 +167,7 @@ public class PlayerController : MonoBehaviour
             Vector3 lookDir = (center - targetPos).normalized;
             Quaternion targetRot = Quaternion.LookRotation(lookDir);
 
-            selectedUnits[i].MoveTo(targetPos, 3f); // Move 3x faster
+            selectedUnits[i].MoveTo(targetPos, 3f);
             selectedUnits[i].RotateTo(lookDir);
             selectedUnits[i].LockRotation();
             formationSlots.Add(new FormationSlot { unit = selectedUnits[i], offset = targetPos - center, rotation = targetRot });
@@ -172,50 +177,42 @@ public class PlayerController : MonoBehaviour
 
     void Update3DFormation()
     {
-        if (selectedUnits.Count < 2 || currentMode != FormationMode.Mode3D) // 3D mode requires at least 2 units
-        {
-            BreakFormation();
-            return;
-        }
-
-        BreakFormation(); // Reset previous formation state
-        currentMode = FormationMode.Mode3D; // Ensure correct mode is set
+        if (selectedUnits.Count < 2) return;
 
         currentFormationGroup = new FormationGroup();
         currentFormationGroup.units.AddRange(selectedUnits);
 
-        // Calculate offsets first
         List<Vector3> offsets = new List<Vector3>();
         switch (selectedUnits.Count)
         {
-            case 2: // Line, cubes aligned on X-axis (face to face)
+            case 2:
                 offsets.Add(new Vector3(-CUBE_SIZE / 2, 0, 0));
                 offsets.Add(new Vector3(CUBE_SIZE / 2, 0, 0));
                 break;
-            case 3: // Equilateral triangle, touching (as tightly as possible based on cube centers)
+            case 3:
                 float dist_center_to_vertex_3 = CUBE_SIZE / Mathf.Sqrt(3);
                 offsets.Add(new Vector3(0, 0, dist_center_to_vertex_3));
                 offsets.Add(new Vector3(dist_center_to_vertex_3 * Mathf.Cos(Mathf.Deg2Rad * 210), 0, dist_center_to_vertex_3 * Mathf.Sin(Mathf.Deg2Rad * 210)));
                 offsets.Add(new Vector3(dist_center_to_vertex_3 * Mathf.Cos(Mathf.Deg2Rad * 330), 0, dist_center_to_vertex_3 * Mathf.Sin(Mathf.Deg2Rad * 330)));
                 break;
-            case 4: // Triangle base + 1 on top
+            case 4:
                 float dist_center_to_vertex_4 = CUBE_SIZE / Mathf.Sqrt(3);
                 offsets.Add(new Vector3(0, 0, dist_center_to_vertex_4));
                 offsets.Add(new Vector3(dist_center_to_vertex_4 * Mathf.Cos(Mathf.Deg2Rad * 210), 0, dist_center_to_vertex_4 * Mathf.Sin(Mathf.Deg2Rad * 210)));
                 offsets.Add(new Vector3(dist_center_to_vertex_4 * Mathf.Cos(Mathf.Deg2Rad * 330), 0, dist_center_to_vertex_4 * Mathf.Sin(Mathf.Deg2Rad * 330)));
                 offsets.Add(new Vector3(0, CUBE_SIZE, 0));
                 break;
-            case 5: // Square Pyramid
+            case 5:
                 offsets.Add(new Vector3(-CUBE_SIZE / 2, 0, -CUBE_SIZE / 2)); offsets.Add(new Vector3(CUBE_SIZE / 2, 0, -CUBE_SIZE / 2));
                 offsets.Add(new Vector3(-CUBE_SIZE / 2, 0, CUBE_SIZE / 2)); offsets.Add(new Vector3(CUBE_SIZE / 2, 0, CUBE_SIZE / 2));
                 offsets.Add(new Vector3(0, CUBE_SIZE, 0));
                 break;
-            case 6: // Square base + 2 on top (line)
+            case 6:
                 offsets.Add(new Vector3(-CUBE_SIZE / 2, 0, -CUBE_SIZE / 2)); offsets.Add(new Vector3(CUBE_SIZE / 2, 0, -CUBE_SIZE / 2));
                 offsets.Add(new Vector3(-CUBE_SIZE / 2, 0, CUBE_SIZE / 2)); offsets.Add(new Vector3(CUBE_SIZE / 2, 0, CUBE_SIZE / 2));
                 offsets.Add(new Vector3(-CUBE_SIZE / 2, CUBE_SIZE, 0)); offsets.Add(new Vector3(CUBE_SIZE / 2, CUBE_SIZE, 0));
                 break;
-            case 7: // Square base + 3 on top (triangle)
+            case 7:
                 offsets.Add(new Vector3(-CUBE_SIZE / 2, 0, -CUBE_SIZE / 2)); offsets.Add(new Vector3(CUBE_SIZE / 2, 0, -CUBE_SIZE / 2));
                 offsets.Add(new Vector3(-CUBE_SIZE / 2, 0, CUBE_SIZE / 2)); offsets.Add(new Vector3(CUBE_SIZE / 2, 0, CUBE_SIZE / 2));
                 float dist_center_to_vertex_7 = CUBE_SIZE / Mathf.Sqrt(3);
@@ -223,7 +220,7 @@ public class PlayerController : MonoBehaviour
                 offsets.Add(new Vector3(dist_center_to_vertex_7 * Mathf.Cos(Mathf.Deg2Rad * 210), CUBE_SIZE, dist_center_to_vertex_7 * Mathf.Sin(Mathf.Deg2Rad * 210)));
                 offsets.Add(new Vector3(dist_center_to_vertex_7 * Mathf.Cos(Mathf.Deg2Rad * 330), CUBE_SIZE, dist_center_to_vertex_7 * Mathf.Sin(Mathf.Deg2Rad * 330)));
                 break;
-            case 8: // Full Cube (2x2x2)
+            case 8:
                 offsets.Add(new Vector3(-CUBE_SIZE / 2, 0, -CUBE_SIZE / 2)); offsets.Add(new Vector3(CUBE_SIZE / 2, 0, -CUBE_SIZE / 2));
                 offsets.Add(new Vector3(-CUBE_SIZE / 2, 0, CUBE_SIZE / 2)); offsets.Add(new Vector3(CUBE_SIZE / 2, 0, CUBE_SIZE / 2));
                 offsets.Add(new Vector3(-CUBE_SIZE / 2, CUBE_SIZE, -CUBE_SIZE / 2)); offsets.Add(new Vector3(CUBE_SIZE / 2, CUBE_SIZE, -CUBE_SIZE / 2));
@@ -231,84 +228,82 @@ public class PlayerController : MonoBehaviour
                 break;
         }
 
-        // Determine the formation's center based on selected units' current positions
         Vector3 formationCurrentCenter = Vector3.zero;
         foreach (Unit unit in selectedUnits)
         {
             formationCurrentCenter += unit.transform.position;
         }
         formationCurrentCenter /= selectedUnits.Count;
-        formationCurrentCenter.y = CUBE_SIZE / 2.0f; // Base of formation on ground
+        formationCurrentCenter.y = CUBE_SIZE / 2.0f;
 
-        Unit leaderUnit = selectedUnits[0]; // First selected unit is the leader
+        Unit leaderUnit = selectedUnits[0];
         leaderUnit.IsLeader = true;
-        leaderUnit.EnableNavMeshAgent(true); // Leader uses NavMeshAgent
-        leaderUnit.SetNavMeshAgentControl(true); // Leader's NavMeshAgent controls its movement
+        leaderUnit.EnableNavMeshAgent(true);
+        leaderUnit.SetNavMeshAgentControl(true);
 
         for (int i = 0; i < selectedUnits.Count; i++)
         {
             Unit unit = selectedUnits[i];
             unit.formationGroup = currentFormationGroup;
 
-            if (unit != leaderUnit) // If not the leader, it's a follower
+            if (unit != leaderUnit)
             {
-                unit.EnableNavMeshAgent(false); // Disable NavMeshAgent for followers
-                unit.SetNavMeshAgentControl(false); // Disable agent control for followers
+                unit.EnableNavMeshAgent(false);
+                unit.SetNavMeshAgentControl(false);
                 
-                // Calculate offset relative to the leader's *initial* position in the formation
                 Vector3 offsetFromLeader = offsets[i] - offsets[selectedUnits.IndexOf(leaderUnit)];
                 unit.SetLeader(leaderUnit, offsetFromLeader);
             }
             
-            // Initial placement for all units (including leader)
             Vector3 targetPos = formationCurrentCenter + offsets[i];
-            unit.MoveTo(targetPos, 3f); // Use MoveTo for initial "climbing" animation
-            unit.LockRotation(); // Lock rotation for all units in formation
-            unit.transform.rotation = Quaternion.identity; // Align to world axes
+            unit.MoveTo(targetPos, 3f);
+            unit.LockRotation();
+            unit.transform.rotation = Quaternion.identity;
             formationSlots.Add(new FormationSlot { unit = unit, offset = offsets[i], rotation = Quaternion.identity });
         }
     }
-    
-    void Release3DFormation() // Changed back to a regular method
+
+    void UpdateLadderFormation()
     {
-        Vector3 formationCenter = Vector3.zero;
-        List<Unit> unitsInFormation = new List<Unit>();
+        if (selectedUnits.Count < 1) return;
 
-        foreach (var slot in formationSlots)
+        currentFormationGroup = new FormationGroup();
+        currentFormationGroup.units.AddRange(selectedUnits);
+
+        Vector3 formationCurrentCenter = Vector3.zero;
+        foreach (Unit unit in selectedUnits)
         {
-            if(slot.unit != null)
+            formationCurrentCenter += unit.transform.position;
+        }
+        formationCurrentCenter /= selectedUnits.Count;
+        formationCurrentCenter.y = CUBE_SIZE / 2.0f;
+
+        Unit leaderUnit = selectedUnits[0];
+        leaderUnit.IsLeader = true;
+        leaderUnit.EnableNavMeshAgent(true);
+        leaderUnit.SetNavMeshAgentControl(true);
+
+        formationSlots.Clear();
+        for (int i = 0; i < selectedUnits.Count; i++)
+        {
+            Unit unit = selectedUnits[i];
+            unit.formationGroup = currentFormationGroup;
+
+            Vector3 offset = new Vector3(0, i * CUBE_SIZE, 0);
+            
+            if (unit != leaderUnit)
             {
-                unitsInFormation.Add(slot.unit);
-                formationCenter += slot.unit.transform.position; // Summing up current positions
+                unit.EnableNavMeshAgent(false);
+                unit.SetNavMeshAgentControl(false);
+                unit.SetLeader(leaderUnit, offset); 
             }
+            
+            Vector3 targetPos = formationCurrentCenter + offset;
+            unit.MoveTo(targetPos, 2f);
+            unit.LockRotation();
+            unit.transform.rotation = Quaternion.identity;
+            formationSlots.Add(new FormationSlot { unit = unit, offset = offset, rotation = Quaternion.identity });
         }
-        formationCenter /= unitsInFormation.Count;
-        formationCenter.y = 0; // Ensure the center is on the ground
-
-        float scatterDistance = 1.0f; // Distance to scatter each cube outwards
-
-        foreach (Unit unit in unitsInFormation)
-        {
-            // Instant drop to ground
-            Vector3 groundPos = new Vector3(unit.transform.position.x, 0, unit.transform.position.z);
-            unit.transform.position = groundPos;
-
-            // Re-enable NavMeshAgent and trigger avoidance
-            unit.EnableNavMeshAgent(true);
-            unit.SetNavMeshAgentControl(true);
-            unit.UnlockRotation();
-            unit.ClearLeader();
-            unit.IsLeader = false;
-
-            // Calculate scatter target: move away from the formation center
-            Vector3 directionFromCenter = (groundPos - formationCenter).normalized;
-            Vector3 scatterTarget = groundPos + directionFromCenter * scatterDistance;
-
-            // Give a command to move to the scatter target
-            // This will trigger NavMeshAgent avoidance and create an outward burst effect.
-            unit.MoveTo(scatterTarget, 2f); // Move at a moderate speed
-        }
-        formationSlots.Clear(); // Clear slots immediately after processing
     }
 
     void MoveSelectedUnits()
@@ -329,29 +324,20 @@ public class PlayerController : MonoBehaviour
                     slot.unit.transform.rotation = slot.rotation;
                 }
             }
-            else if (currentMode == FormationMode.Mode3D)
+            else if (currentMode == FormationMode.Mode3D || currentMode == FormationMode.LadderMode)
             {
                 Vector3 newTargetForLeader = hit.point;
-                // Adjust click point so base of formation is on ground
                 newTargetForLeader.y = CUBE_SIZE / 2.0f; 
 
-                Unit leader = null;
-                foreach (Unit unit in selectedUnits)
-                {
-                    if (unit.IsLeader)
-                    {
-                        leader = unit;
-                        break;
-                    }
-                }
+                Unit leader = selectedUnits.Find(u => u.IsLeader);
+                if (leader == null && selectedUnits.Count > 0) leader = selectedUnits[0];
 
                 if (leader != null)
                 {
-                    leader.MoveTo(newTargetForLeader); // Leader moves via NavMeshAgent
-                    // Follower units will update their positions relative to the leader in their Update method
+                    leader.MoveTo(newTargetForLeader);
                 }
             }
-            else // Not in a formation, default circular spread
+            else
             {
                 int unitCount = selectedUnits.Count;
                 float angle = 360f / unitCount;
@@ -394,8 +380,16 @@ public class PlayerController : MonoBehaviour
             if (!Keyboard.current.shiftKey.isPressed && !Keyboard.current.leftCtrlKey.isPressed) ClearSelection();
         }
 
-        if (currentMode == FormationMode.Mode2D && selectedUnits.Count > 0) UpdateFormation();
-        else if (currentMode == FormationMode.Mode3D && selectedUnits.Count > 1) Update3DFormation();
+        if (currentMode == FormationMode.Mode2D && selectedUnits.Count > 0)
+        {
+            BreakFormation(true);
+            UpdateFormation();
+        }
+        else if (currentMode == FormationMode.Mode3D && selectedUnits.Count > 1)
+        {
+            BreakFormation(true);
+            Update3DFormation();
+        }
     }
 
     void HandleDragSelection()
@@ -405,11 +399,10 @@ public class PlayerController : MonoBehaviour
             ClearSelection();
         }
 
-        // Corrected Rect calculation for OnGUI
         float x1 = startDrag.x;
-        float y1 = Screen.height - startDrag.y; // Invert Y for GUI space
+        float y1 = Screen.height - startDrag.y;
         float x2 = Mouse.current.position.ReadValue().x;
-        float y2 = Screen.height - Mouse.current.position.ReadValue().y; // Invert Y for GUI space
+        float y2 = Screen.height - Mouse.current.position.ReadValue().y;
 
         float rectX = Mathf.Min(x1, x2);
         float rectY = Mathf.Min(y1, y2);
@@ -417,11 +410,9 @@ public class PlayerController : MonoBehaviour
         float rectHeight = Mathf.Abs(y1 - y2);
         Rect selectionRect = new Rect(rectX, rectY, rectWidth, rectHeight);
 
-
         foreach (Unit unit in units)
         {
             Vector3 screenPos = cam.WorldToScreenPoint(unit.transform.position);
-            // screenPos.z > 0 check to ensure unit is in front of camera
             if (screenPos.z > 0 && selectionRect.Contains(new Vector2(screenPos.x, Screen.height - screenPos.y)))
             {
                 if (Keyboard.current.leftCtrlKey.isPressed)
@@ -432,8 +423,16 @@ public class PlayerController : MonoBehaviour
                 else SelectUnit(unit);
             }
         }
-        if (currentMode == FormationMode.Mode2D && selectedUnits.Count > 0) UpdateFormation();
-        else if (currentMode == FormationMode.Mode3D && selectedUnits.Count > 1) Update3DFormation();
+        if (currentMode == FormationMode.Mode2D && selectedUnits.Count > 0)
+        {
+            BreakFormation(true);
+            UpdateFormation();
+        }
+        else if (currentMode == FormationMode.Mode3D && selectedUnits.Count > 1)
+        {
+            BreakFormation(true);
+            Update3DFormation();
+        }
     }
 
     void SelectUnit(Unit unit)
@@ -461,36 +460,85 @@ public class PlayerController : MonoBehaviour
             unit.ToggleSelection(false);
         }
         selectedUnits.Clear();
-        BreakFormation();
+        BreakFormation(false);
     }
 
-    void BreakFormation()
+    void BreakFormation(bool forNewFormation = false)
     {
-        if (currentMode == FormationMode.Mode3D)
+        if (currentMode == FormationMode.None) return;
+
+        List<Unit> unitsToProcess = new List<Unit>();
+        if (currentFormationGroup != null)
         {
-            Release3DFormation(); // Handle 3D specific release (instant drop, re-enable NavMeshAgent, nudge)
+            unitsToProcess.AddRange(currentFormationGroup.units);
         }
-        else // For 2D mode or no formation
+
+        if (currentMode == FormationMode.Mode3D || currentMode == FormationMode.LadderMode)
         {
-            if (currentFormationGroup != null)
+            if (forNewFormation)
             {
-                foreach (Unit unit in currentFormationGroup.units)
+                foreach (Unit unit in unitsToProcess)
                 {
-                    if (unit != null)
-                    {
-                        unit.UnlockRotation();
-                        unit.formationGroup = null;
-                        unit.EnableNavMeshAgent(true); // Re-enable NavMeshAgent
-                        unit.SetNavMeshAgentControl(true); // Re-enable agent control
-                        unit.ClearLeader(); // Clear leader reference
-                        unit.IsLeader = false; // Reset leader status
-                    }
+                    if (unit == null) continue;
+                    unit.StopAllCoroutines();
+                    Vector3 groundPos = new Vector3(unit.transform.position.x, 0.5f, unit.transform.position.z);
+                    unit.transform.position = groundPos;
+                    
+                    unit.EnableNavMeshAgent(true);
+                    unit.SetNavMeshAgentControl(true);
+                    unit.UnlockRotation();
+                    unit.ClearLeader();
+                    unit.IsLeader = false;
+                    unit.formationGroup = null;
                 }
-                currentFormationGroup = null;
             }
-            formationSlots.Clear(); // Clear for 2D/None
+            else
+            {
+                Vector3 formationCenter = Vector3.zero;
+                if (unitsToProcess.Count > 0)
+                {
+                    foreach(var unit in unitsToProcess) formationCenter += unit.transform.position;
+                    formationCenter /= unitsToProcess.Count;
+                }
+                formationCenter.y = 0.5f;
+
+                float scatterDistance = 1.0f;
+                int unitCount = unitsToProcess.Count;
+                if (unitCount == 0) return;
+                float angleIncrement = 360f / unitCount;
+
+                for (int i = 0; i < unitCount; i++)
+                {
+                    Unit unit = unitsToProcess[i];
+                    if (unit == null) continue;
+                    
+                    float angleRad = Mathf.Deg2Rad * (angleIncrement * i);
+                    float x = Mathf.Cos(angleRad) * scatterDistance;
+                    float z = Mathf.Sin(angleRad) * scatterDistance;
+                    Vector3 scatterTarget = formationCenter + new Vector3(x, 0, z);
+
+                    StartCoroutine(unit.FallAndScatter(scatterTarget, 4f));
+                }
+            }
+        }
+        else if (currentMode == FormationMode.Mode2D)
+        {
+            foreach (Unit unit in unitsToProcess)
+            {
+                if (unit != null)
+                {
+                    unit.UnlockRotation();
+                    unit.formationGroup = null;
+                }
+            }
         }
         
+        if (currentFormationGroup != null)
+        {
+            currentFormationGroup.units.Clear();
+            currentFormationGroup = null;
+        }
+        formationSlots.Clear();
         currentMode = FormationMode.None;
 
         if (lineDrawer != null)

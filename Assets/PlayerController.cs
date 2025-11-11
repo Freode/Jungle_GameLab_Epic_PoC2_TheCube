@@ -198,6 +198,171 @@ public class PlayerController : MonoBehaviour
         yield return StartCoroutine(topCube.MoveForwardAndFall(topCubeTargetWorldPos, 15f, 20f));
     }
 
+    private void TeleportAndResetUnits(List<Unit> unitsToReset, Vector3 center)
+    {
+        for (int i = 0; i < unitsToReset.Count; i++)
+        {
+            Unit unit = unitsToReset[i];
+            if (unit == null) continue;
+            float angleRad = Mathf.Deg2Rad * (360f / unitsToReset.Count * i);
+            Vector3 scatterTarget = center + new Vector3(Mathf.Cos(angleRad), 0, Mathf.Sin(angleRad)) * 1.5f;
+            
+            unit.StopAllCoroutines();
+            unit.transform.position = scatterTarget;
+            unit.EnableNavMeshAgent(true);
+            unit.SetNavMeshAgentControl(true);
+            unit.UnlockRotation();
+            unit.ClearLeader();
+            unit.IsLeader = false;
+            unit.currentMode = FormationMode.Individual; // Ensure unit is in individual mode
+        }
+    }
+
+    IEnumerator BreakFormation(FormationMode modeToBreak, bool animate, FormationMode nextMode = FormationMode.Individual)
+    {
+        Debug.Log($"[Debug BreakFormation] Called. modeToBreak: {modeToBreak}, animate: {animate}, nextMode: {nextMode}");
+
+        List<Unit> unitsToBreak = new List<Unit>();
+        GameObject parentToDestroy = null; // Temporarily store parent reference
+
+        // If modeToBreak is Solid or Ladder, units are parented, so extract them.
+        if (modeToBreak == FormationMode.Solid || modeToBreak == FormationMode.Ladder)
+        {
+            if (currentFormationParent != null)
+            {
+                foreach (Transform child in currentFormationParent.transform)
+                {
+                    Unit unit = child.GetComponent<Unit>();
+                    if (unit != null) unitsToBreak.Add(unit);
+                }
+                // Now un-parent the units BEFORE storing the parent for destruction
+                foreach (var unit in unitsToBreak)
+                {
+                    unit.transform.parent = null;
+                    unit.StopMovement(); // Stop NavMeshAgent movement explicitly
+                }
+
+                parentToDestroy = currentFormationParent; // Store reference to parent
+                currentFormationParent = null; // Clear reference immediately
+            }
+        }
+        else if (modeToBreak == FormationMode.Cluster) // For Cluster mode, units are not parented
+        {
+            // Get units from the formationGroup's current list (this is the units that were in cluster mode)
+            if (formationGroup != null && formationGroup.units != null)
+            {
+                unitsToBreak.AddRange(formationGroup.units);
+                foreach (var unit in unitsToBreak)
+                {
+                    unit.StopMovement(); // Stop NavMeshAgent movement explicitly
+                }
+            }
+        }
+
+        Debug.Log($"[Debug BreakFormation] unitsToBreak count: {unitsToBreak.Count}");
+
+        Vector3 center = Vector3.zero;
+        if (unitsToBreak.Count > 0)
+        {
+            foreach(var unit in unitsToBreak) center += unit.transform.position;
+            center /= unitsToBreak.Count;
+        }
+        center.y = 0.0f; // Calculate center based on ground plane for consistency
+
+        if (animate)
+        {
+            Debug.Log("[Debug BreakFormation] Animation requested.");
+            List<Coroutine> runningAnimations = new List<Coroutine>();
+            
+            if (modeToBreak == FormationMode.Ladder && nextMode == FormationMode.Solid)
+            {
+                Debug.Log("[Debug BreakFormation] Entering Ladder -> Solid animation.");
+                List<Vector3> futureOffsets = Get3DFormationOffsets(unitsToBreak.Count);
+                for (int i = 0; i < unitsToBreak.Count; i++)
+                {
+                    Unit unit = unitsToBreak[i];
+                    if (unit == null) continue;
+
+                    Vector3 finalOffset = futureOffsets[i];
+                    if (Mathf.Approximately(finalOffset.y, 0))
+                    {
+                        finalOffset.y += CUBE_SIZE / 2.0f;
+                    }
+                    
+                    Vector3 scatterTarget = center + finalOffset;
+                    Vector3 scatterDirection = (scatterTarget - center).normalized; // Calculate direction
+                    runningAnimations.Add(StartCoroutine(unit.FallAndScatter(scatterTarget, 4f, scatterDirection)));
+                }
+            }
+            else if (modeToBreak == FormationMode.Ladder && nextMode == FormationMode.Cluster)
+            {
+                Debug.Log("[Debug BreakFormation] Entering Ladder -> Cluster animation.");
+                int unitCount = unitsToBreak.Count;
+                if (unitCount > 0)
+                {
+                    const float baseSideLength = 3.0f;
+                    float desiredSideLength = baseSideLength + (unitCount * 0.2f);
+                    float radius = desiredSideLength / (2 * Mathf.Sin(Mathf.PI / unitCount));
+                    float angleIncrement = 360f / unitCount;
+
+                    for (int i = 0; i < unitCount; i++)
+                    {
+                        Unit unit = unitsToBreak[i];
+                        if (unit == null) continue;
+
+                        float angleRad = Mathf.Deg2Rad * (angleIncrement * i);
+                        float x = Mathf.Cos(angleRad) * radius;
+                        float z = Mathf.Sin(angleRad) * radius;
+                        Vector3 scatterTarget = center + new Vector3(x, CUBE_SIZE / 2.0f, z);
+                        Vector3 scatterDirection = (scatterTarget - center).normalized; // Calculate direction
+                        runningAnimations.Add(StartCoroutine(unit.FallAndScatter(scatterTarget, 4f, scatterDirection)));
+                    }
+                }
+            }
+            else // Default circular scatter (This should be the most common case for breaking into Individual mode)
+            {
+                Debug.Log("[Debug BreakFormation] Entering Default circular scatter animation.");
+
+                // If unitsToBreak comes from Cluster mode, it cannot be unitsToBreak and currentFormationParent.
+                // The current implementation of BreakFormation assumes units are unparented from currentFormationParent
+                // which is only for Solid and Ladder.
+                // For Cluster mode, the units are already free. We need to obtain the units from the previous formationGroup.units.
+
+                for (int i = 0; i < unitsToBreak.Count; i++)
+                {
+                    Unit unit = unitsToBreak[i];
+                    if (unit == null) continue;
+                    float angleRad = Mathf.Deg2Rad * (360f / unitsToBreak.Count * i);
+                    Vector3 scatterTarget = center + new Vector3(Mathf.Cos(angleRad), CUBE_SIZE / 2.0f, Mathf.Sin(angleRad)) * 1.5f;
+                    Vector3 scatterDirection = (scatterTarget - center).normalized; // Calculate direction
+                    Debug.Log($"[Debug BreakFormation] Unit '{unit.gameObject.name}' scattering to {scatterTarget}");
+                    runningAnimations.Add(StartCoroutine(unit.FallAndScatter(scatterTarget, 4f, scatterDirection)));
+                }
+            }
+
+            foreach (var coroutine in runningAnimations)
+            {
+                if (coroutine != null) yield return coroutine;
+            }
+            Debug.Log("[Debug BreakFormation] All break animations completed.");
+        }
+        else // No animation, just reset
+        {
+            Debug.Log("[Debug BreakFormation] No animation requested. Teleporting units.");
+            TeleportAndResetUnits(unitsToBreak, center);
+        }
+        
+        // Destroy the parent GameObject AFTER all animations have started/completed
+        if (parentToDestroy != null)
+        {
+            Destroy(parentToDestroy);
+            Debug.Log("[Debug BreakFormation] currentFormationParent destroyed.");
+        }
+
+        formationSlots.Clear();
+        if (lineDrawer != null) lineDrawer.ClearLines();
+    }
+
     IEnumerator ExecuteMode2DSkill()
     {
         isExecutingSkill = true;
@@ -278,6 +443,8 @@ public class PlayerController : MonoBehaviour
         isSwitchingFormation = true;
 
         FormationMode previousMode = currentMode;
+        
+        // Perform non-animated cleanup first
         CleanupPreviousFormation(previousMode);
 
         currentMode = newMode;
@@ -302,6 +469,13 @@ public class PlayerController : MonoBehaviour
         else
         {
             formationGroup.units.AddRange(selectedUnits);
+        }
+
+        // If we are breaking a formation (i.e., previousMode was not Individual) AND switching to Individual mode,
+        // then animate the break.
+        if (previousMode != FormationMode.Individual && newMode == FormationMode.Individual)
+        {
+            yield return StartCoroutine(BreakFormation(previousMode, true, newMode));
         }
 
         if (newMode == FormationMode.Individual)
@@ -341,23 +515,8 @@ public class PlayerController : MonoBehaviour
         {
             if (currentFormationParent != null)
             {
-                List<Unit> unitsToUnparent = new List<Unit>();
-                foreach (Transform child in currentFormationParent.transform)
-                {
-                    Unit unit = child.GetComponent<Unit>();
-                    if (unit != null) unitsToUnparent.Add(unit);
-                }
-
-                foreach (var unit in unitsToUnparent)
-                {
-                    unit.transform.parent = null;
-                    unit.EnableNavMeshAgent(true);
-                    unit.UnlockRotation();
-                    unit.ClearLeader();
-                }
-                
-                Destroy(currentFormationParent);
-                currentFormationParent = null;
+                // Unparenting and destruction of currentFormationParent will now be handled by BreakFormation.
+                // currentFormationParent = null; // BreakFormation will handle setting to null after destruction
             }
         }
         
@@ -411,7 +570,8 @@ public class PlayerController : MonoBehaviour
             {
                 Vector3 fallTarget = new Vector3(targetPos.x, currentUnit.transform.position.y, targetPos.z);
                 fallTarget.y = CUBE_SIZE / 2.0f;
-                coroutines.Add(StartCoroutine(currentUnit.FallAndScatter(fallTarget, 4f)));
+                Vector3 scatterDirection = (fallTarget - center).normalized; // Calculate direction
+                coroutines.Add(StartCoroutine(currentUnit.FallAndScatter(fallTarget, 4f, scatterDirection)));
             }
             else
             {
@@ -646,14 +806,25 @@ public class PlayerController : MonoBehaviour
 
         FormationMode modeToRebuild = currentMode;
         
-        CleanupPreviousFormation(modeToRebuild);
+        // Cleanup without animation
+        CleanupPreviousFormation(modeToRebuild); 
         currentMode = modeToRebuild;
-        if (formationGroup != null)
+        foreach (var unit in units)
         {
-            formationGroup.currentMode = modeToRebuild;
-            formationGroup.units.Clear();
-            formationGroup.units.AddRange(selectedUnits);
+            unit.currentMode = modeToRebuild;
         }
+
+        if (formationGroup == null)
+        {
+            Debug.LogError("FormationGroup reference is not assigned in PlayerController. Please assign the FormationManager GameObject to the 'Formation Group' field in the Inspector.", this);
+            isSwitchingFormation = false;
+            yield break;
+        }
+        
+        formationGroup.currentMode = modeToRebuild;
+        formationGroup.units.Clear();
+        formationGroup.units.AddRange(selectedUnits);
+
 
 
         List<Coroutine> formationCoroutines = new List<Coroutine>();

@@ -146,7 +146,7 @@ public class Unit : MonoBehaviour
         agent.updateRotation = enable;
     }
 
-    public IEnumerator FallAndScatter(Vector3 targetPosition, float speedMultiplier)
+    public IEnumerator FallAndScatter(Vector3 targetPosition, float speedMultiplier, Vector3 scatterDirection)
     {
         EnableNavMeshAgent(false); // Ensure NavMeshAgent is disabled for direct transform manipulation
         SetNavMeshAgentControl(false);
@@ -171,6 +171,15 @@ public class Unit : MonoBehaviour
             yield return null;
         }
         transform.position = targetPosition;
+
+        // NEW: Move 1 unit further in the scatter direction after reaching the target position
+        Vector3 finalPushTarget = targetPosition + scatterDirection.normalized * CUBE_SIZE;
+        while (Vector3.Distance(transform.position, finalPushTarget) > 0.05f)
+        {
+            transform.position = Vector3.MoveTowards(transform.position, finalPushTarget, currentSpeed * Time.deltaTime);
+            yield return null;
+        }
+        transform.position = finalPushTarget;
 
         // Once scattered, re-enable NavMeshAgent
         EnableNavMeshAgent(true);

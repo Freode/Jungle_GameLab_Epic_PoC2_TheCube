@@ -13,6 +13,9 @@ public class Unit : MonoBehaviour
     private float originalSpeed;
     private float originalAcceleration;
     private const float CUBE_SIZE = 1.0f;
+    public float fallSpeed = 5f;
+
+    public List<GameObject> corners = new List<GameObject>();
 
     void Awake()
     {
@@ -218,6 +221,78 @@ public class Unit : MonoBehaviour
             Vector3 targetPosition = _leader.transform.position + rotatedOffset;
             transform.position = Vector3.MoveTowards(transform.position, targetPosition, originalSpeed * 2f * Time.deltaTime); // Move faster to keep up
             transform.rotation = Quaternion.RotateTowards(transform.rotation, _leader.transform.rotation, agent.angularSpeed * Time.deltaTime); // Match leader's rotation
+        }
+        else if (!agent.enabled && _leader == null) // If NavMeshAgent is disabled and not following a leader, check for falling
+        {
+            CheckForGroundAndFall();
+        }
+        CheckForGroundAndFall();
+    }
+
+    private void CheckForGroundAndFall()
+    {
+        if (corners == null || corners.Count == 0)
+        {
+            // If no custom corners are defined, fall back to default behavior or do nothing
+            // For now, let's assume if corners are not set, we don't perform this check
+            return;
+        }
+
+        Vector3 rayDirection = Vector3.down;
+        float rayDistance = 0.1f; // 1 cm
+
+        bool grounded = false;
+        RaycastHit hit;
+
+        // Perform raycasts from each defined corner
+        foreach (GameObject cornerObject in corners)
+        {
+            if (cornerObject == null) continue; // Skip if GameObject is null
+
+            Vector3 rayOrigin = cornerObject.transform.position;
+            if (Physics.Raycast(rayOrigin, rayDirection, out hit, rayDistance))
+            {
+                if (hit.collider.CompareTag("Ground") || hit.collider.CompareTag("Unit"))
+                {
+                    grounded = true;
+                    break; // Found ground, no need to check further
+                }
+            }
+        }
+        Debug.Log(grounded);
+        // If not grounded, move the unit downwards
+        if (!grounded)
+        {
+            transform.position += Vector3.down * fallSpeed * Time.deltaTime;
+            if (agent.enabled) // If agent is enabled but not grounded, disable it
+            {
+                EnableNavMeshAgent(false);
+            }
+        }
+        else // If grounded
+        {
+            if (!agent.enabled) // If agent is disabled but grounded, enable it
+            {
+                EnableNavMeshAgent(true);
+                // Optionally, you might want to reset path or other agent properties here
+                // agent.ResetPath();
+            }
+        }
+    }
+
+    void OnDrawGizmos()
+    {
+        if (corners == null || corners.Count == 0) return;
+
+        float rayDistance = 0.01f; // 1 cm
+        Gizmos.color = Color.red;
+
+        foreach (GameObject cornerObject in corners)
+        {
+            if (cornerObject == null) continue; // Skip if GameObject is null
+
+            Vector3 rayOrigin = cornerObject.transform.position;
+            Gizmos.DrawLine(rayOrigin, rayOrigin + Vector3.down * rayDistance);
         }
     }
 }

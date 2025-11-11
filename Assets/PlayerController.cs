@@ -266,7 +266,7 @@ public class PlayerController : MonoBehaviour
             }
 
             coroutines.Add(currentUnit.RotateTo(lookDir));
-            currentUnit.LockRotation();
+            // currentUnit.LockRotation(); // Removed to allow NavMeshAgent to handle rotation
             formationSlots.Add(new FormationSlot { unit = selectedUnits[i], offset = targetPos - center, rotation = targetRot });
         }
         lineDrawer.DrawLines(selectedUnits);
@@ -457,7 +457,7 @@ public class PlayerController : MonoBehaviour
                     if (slot.unit == null) continue;
                     Vector3 targetPos = newCenter + slot.offset;
                     slot.unit.MoveTo(targetPos);
-                    slot.unit.transform.rotation = slot.rotation;
+                    // slot.unit.transform.rotation = slot.rotation; // Removed to allow NavMeshAgent to handle rotation
                 }
             }
             else

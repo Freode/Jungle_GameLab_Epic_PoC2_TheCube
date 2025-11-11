@@ -27,7 +27,7 @@ public class Unit : MonoBehaviour
         rend.material.color = selected ? Color.green : Color.white;
     }
 
-    public void MoveTo(Vector3 position, float speedMultiplier = 1f)
+    public Coroutine MoveTo(Vector3 position, float speedMultiplier = 1f)
     {
         if (agent.enabled) // Only use NavMeshAgent if it's enabled
         {
@@ -37,13 +37,14 @@ public class Unit : MonoBehaviour
 
             if (speedMultiplier > 1f)
             {
-                StartCoroutine(ResetSpeedAfterArrival());
+                return StartCoroutine(ResetSpeedAfterArrival());
             }
+            return null;
         }
         else // Smoothly move to position if NavMeshAgent is disabled
         {
             StopAllCoroutines(); // Stop any previous movement coroutine
-            StartCoroutine(SmoothMoveCoroutine(position, speedMultiplier));
+            return StartCoroutine(SmoothMoveCoroutine(position, speedMultiplier));
         }
     }
 
@@ -74,11 +75,11 @@ public class Unit : MonoBehaviour
         }
     }
 
-    public void RotateTo(Vector3 direction)
+    public Coroutine RotateTo(Vector3 direction)
     {
-        if (direction == Vector3.zero) return;
+        if (direction == Vector3.zero) return null;
         Quaternion targetRotation = Quaternion.LookRotation(direction);
-        StartCoroutine(RotateCoroutine(targetRotation));
+        return StartCoroutine(RotateCoroutine(targetRotation));
     }
 
     private IEnumerator RotateCoroutine(Quaternion targetRotation)

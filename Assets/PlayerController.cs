@@ -126,20 +126,30 @@ public class PlayerController : MonoBehaviour
 
         isSwitchingFormation = true;
 
+        FormationMode previousMode = currentMode;
         CleanupPreviousFormation();
 
         currentMode = newMode;
+        List<Coroutine> formationCoroutines = new List<Coroutine>();
         switch (newMode)
         {
             case FormationMode.Mode2D:
-                UpdateFormation();
+                formationCoroutines = UpdateFormation(previousMode);
                 break;
             case FormationMode.Mode3D:
-                Update3DFormation();
+                formationCoroutines = Update3DFormation(previousMode);
                 break;
             case FormationMode.LadderMode:
-                UpdateLadderFormation();
+                formationCoroutines = UpdateLadderFormation(previousMode);
                 break;
+        }
+
+        if (formationCoroutines != null)
+        {
+            foreach (var co in formationCoroutines)
+            {
+                if (co != null) yield return co;
+            }
         }
 
         isSwitchingFormation = false;
@@ -199,10 +209,11 @@ public class PlayerController : MonoBehaviour
         currentMode = FormationMode.None;
     }
 
-    void UpdateFormation()
+    List<Coroutine> UpdateFormation(FormationMode previousMode = FormationMode.None)
     {
-        if (selectedUnits.Count < 1) return;
+        if (selectedUnits.Count < 1) return new List<Coroutine>();
 
+        var coroutines = new List<Coroutine>();
         currentFormationGroup = new FormationGroup();
         currentFormationGroup.units.AddRange(selectedUnits);
 
@@ -221,7 +232,7 @@ public class PlayerController : MonoBehaviour
                 formationSlots.Add(new FormationSlot { unit = unit, offset = unit.transform.position - center, rotation = unit.transform.rotation });
             }
             lineDrawer.DrawLines(selectedUnits);
-            return;
+            return coroutines;
         }
 
         const float baseSideLength = 3.0f;
@@ -229,6 +240,8 @@ public class PlayerController : MonoBehaviour
         float desiredSideLength = baseSideLength + (unitCount * 0.2f);
         float radius = desiredSideLength / (2 * Mathf.Sin(Mathf.PI / unitCount));
         float angleIncrement = 360f / unitCount;
+
+        bool useFallAnimation = (previousMode == FormationMode.Mode3D || previousMode == FormationMode.LadderMode);
 
         formationSlots.Clear();
         for (int i = 0; i < unitCount; i++)
@@ -240,12 +253,24 @@ public class PlayerController : MonoBehaviour
             Vector3 lookDir = (center - targetPos).normalized;
             Quaternion targetRot = Quaternion.LookRotation(lookDir);
 
-            selectedUnits[i].MoveTo(targetPos, 3f);
-            selectedUnits[i].RotateTo(lookDir);
-            selectedUnits[i].LockRotation();
+            Unit currentUnit = selectedUnits[i];
+            if (useFallAnimation)
+            {
+                Vector3 fallTarget = new Vector3(targetPos.x, currentUnit.transform.position.y, targetPos.z);
+                fallTarget.y = CUBE_SIZE / 2.0f;
+                coroutines.Add(StartCoroutine(currentUnit.FallAndScatter(fallTarget, 4f)));
+            }
+            else
+            {
+                coroutines.Add(currentUnit.MoveTo(targetPos, 3f));
+            }
+
+            coroutines.Add(currentUnit.RotateTo(lookDir));
+            currentUnit.LockRotation();
             formationSlots.Add(new FormationSlot { unit = selectedUnits[i], offset = targetPos - center, rotation = targetRot });
         }
         lineDrawer.DrawLines(selectedUnits);
+        return coroutines;
     }
 
     List<Vector3> Get3DFormationOffsets(int count)
@@ -311,10 +336,11 @@ public class PlayerController : MonoBehaviour
         target.localPosition = localPosition;
     }
 
-    void Update3DFormation()
+    List<Coroutine> Update3DFormation(FormationMode previousMode = FormationMode.None)
     {
-        if (selectedUnits.Count < 2) return;
+        if (selectedUnits.Count < 2) return new List<Coroutine>();
 
+        var coroutines = new List<Coroutine>();
         Vector3 formationCenter = Vector3.zero;
         foreach (Unit unit in selectedUnits)
         {
@@ -352,17 +378,19 @@ public class PlayerController : MonoBehaviour
             unit.EnableNavMeshAgent(false);
             unit.transform.parent = currentFormationParent.transform;
             
-            StartCoroutine(MoveToLocalPosition(unit.transform, offset, 0.5f));
+            coroutines.Add(StartCoroutine(MoveToLocalPosition(unit.transform, offset, 0.5f)));
 
             unit.LockRotation();
             unit.transform.localRotation = Quaternion.identity;
         }
+        return coroutines;
     }
 
-    void UpdateLadderFormation()
+    List<Coroutine> UpdateLadderFormation(FormationMode previousMode = FormationMode.None)
     {
-        if (selectedUnits.Count < 1) return;
+        if (selectedUnits.Count < 1) return new List<Coroutine>();
 
+        var coroutines = new List<Coroutine>();
         Vector3 formationCenter = Vector3.zero;
         foreach (Unit unit in selectedUnits)
         {
@@ -394,11 +422,12 @@ public class PlayerController : MonoBehaviour
             unit.EnableNavMeshAgent(false);
             unit.transform.parent = currentFormationParent.transform;
             
-            StartCoroutine(MoveToLocalPosition(unit.transform, offset, 0.5f));
+            coroutines.Add(StartCoroutine(MoveToLocalPosition(unit.transform, offset, 0.5f)));
 
             unit.LockRotation();
             unit.transform.localRotation = Quaternion.identity;
         }
+        return coroutines;
     }
 
     void MoveSelectedUnits()
@@ -456,20 +485,31 @@ public class PlayerController : MonoBehaviour
         isSwitchingFormation = true;
 
         FormationMode modeToRebuild = currentMode;
-        yield return StartCoroutine(BreakFormation(true, modeToRebuild));
-
+        
+        // Rebuilding shouldn't have a break animation, so we just clean the state.
+        CleanupPreviousFormation();
         currentMode = modeToRebuild;
+
+        List<Coroutine> formationCoroutines = new List<Coroutine>();
         switch (currentMode)
         {
             case FormationMode.Mode2D:
-                if (selectedUnits.Count > 0) UpdateFormation();
+                if (selectedUnits.Count > 0) formationCoroutines = UpdateFormation();
                 break;
             case FormationMode.Mode3D:
-                if (selectedUnits.Count > 1) Update3DFormation();
+                if (selectedUnits.Count > 1) formationCoroutines = Update3DFormation();
                 break;
             case FormationMode.LadderMode:
-                if (selectedUnits.Count > 0) UpdateLadderFormation();
+                if (selectedUnits.Count > 0) formationCoroutines = UpdateLadderFormation();
                 break;
+        }
+
+        if (formationCoroutines != null)
+        {
+            foreach (var co in formationCoroutines)
+            {
+                if (co != null) yield return co;
+            }
         }
         
         isSwitchingFormation = false;
@@ -644,7 +684,6 @@ public class PlayerController : MonoBehaviour
                 {
                     List<Coroutine> runningBreaks = new List<Coroutine>();
                     
-                    // Special Case: Ladder -> 3D transition, scatter to final positions
                     if (modeToBreak == FormationMode.LadderMode && nextMode == FormationMode.Mode3D)
                     {
                         List<Vector3> futureOffsets = Get3DFormationOffsets(unitsToBreak.Count);
@@ -661,6 +700,30 @@ public class PlayerController : MonoBehaviour
                             
                             Vector3 scatterTarget = center + finalOffset;
                             runningBreaks.Add(StartCoroutine(unit.FallAndScatter(scatterTarget, 4f)));
+                        }
+                    }
+                    else if (modeToBreak == FormationMode.LadderMode && nextMode == FormationMode.Mode2D)
+                    {
+                        int unitCount = unitsToBreak.Count;
+                        if (unitCount > 0)
+                        {
+                            const float baseSideLength = 3.0f;
+                            float desiredSideLength = baseSideLength + (unitCount * 0.2f);
+                            float radius = desiredSideLength / (2 * Mathf.Sin(Mathf.PI / unitCount));
+                            float angleIncrement = 360f / unitCount;
+
+                            for (int i = 0; i < unitCount; i++)
+                            {
+                                Unit unit = unitsToBreak[i];
+                                if (unit == null) continue;
+
+                                float angleRad = Mathf.Deg2Rad * (angleIncrement * i);
+                                float x = Mathf.Cos(angleRad) * radius;
+                                float z = Mathf.Sin(angleRad) * radius;
+                                Vector3 scatterTarget = center + new Vector3(x, CUBE_SIZE / 2.0f, z);
+                                
+                                runningBreaks.Add(StartCoroutine(unit.FallAndScatter(scatterTarget, 4f)));
+                            }
                         }
                     }
                     else // Default circular scatter

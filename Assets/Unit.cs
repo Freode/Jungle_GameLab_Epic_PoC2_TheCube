@@ -15,7 +15,20 @@ public class Unit : MonoBehaviour
     private const float CUBE_SIZE = 1.0f;
     public float fallSpeed = 5f;
 
+    public bool IsGrounded { get; private set; }
+    public bool AreAllCornersGrounded { get; private set; }
+    public FormationMode currentMode;
+
     public List<GameObject> corners = new List<GameObject>();
+
+    public void Fall()
+    {
+        transform.position += Vector3.down * fallSpeed * Time.deltaTime;
+        if (agent.enabled)
+        {
+            EnableNavMeshAgent(false);
+        }
+    }
 
     void Awake()
     {
@@ -180,14 +193,22 @@ public class Unit : MonoBehaviour
         }
         transform.position = targetAirPosition;
 
-        // 2. Fall to the ground
-        Vector3 groundPosition = new Vector3(transform.position.x, CUBE_SIZE / 2.0f, transform.position.z);
-        while (Vector3.Distance(transform.position, groundPosition) > 0.01f)
+        // 2. Fall until ground is detected (self-contained logic)
+        while (true)
         {
-            transform.position = Vector3.MoveTowards(transform.position, groundPosition, fallSpeed * Time.deltaTime);
+            // Raycast down from the cube's center to find the ground
+            if (Physics.Raycast(transform.position, Vector3.down, out RaycastHit hit, 0.6f)) // Raycast distance slightly more than half the cube's height
+            {
+                if (hit.collider.CompareTag("Ground") || hit.collider.CompareTag("Unit"))
+                {
+                    break; // Ground detected, stop falling.
+                }
+            }
+
+            // If no ground, continue falling
+            transform.position += Vector3.down * fallSpeed * Time.deltaTime;
             yield return null;
         }
-        transform.position = groundPosition;
 
         // 3. Enable agent on the ground
         EnableNavMeshAgent(true);
@@ -222,60 +243,57 @@ public class Unit : MonoBehaviour
             transform.position = Vector3.MoveTowards(transform.position, targetPosition, originalSpeed * 2f * Time.deltaTime); // Move faster to keep up
             transform.rotation = Quaternion.RotateTowards(transform.rotation, _leader.transform.rotation, agent.angularSpeed * Time.deltaTime); // Match leader's rotation
         }
-        else if (!agent.enabled && _leader == null) // If NavMeshAgent is disabled and not following a leader, check for falling
+        
+        CheckGroundedStatus();
+
+        if (currentMode == FormationMode.Individual)
         {
-            CheckForGroundAndFall();
+            if (!IsGrounded)
+            {
+                Fall();
+            }
         }
-        CheckForGroundAndFall();
     }
 
-    private void CheckForGroundAndFall()
+    private void CheckGroundedStatus()
     {
         if (corners == null || corners.Count == 0)
         {
-            // If no custom corners are defined, fall back to default behavior or do nothing
-            // For now, let's assume if corners are not set, we don't perform this check
+            IsGrounded = false; 
+            AreAllCornersGrounded = false;
+            Debug.LogWarning($"[Debug] Unit '{gameObject.name}' has no corners assigned. It is considered ungrounded.", this);
             return;
         }
 
         Vector3 rayDirection = Vector3.down;
-        float rayDistance = 0.1f; // 1 cm
+        float rayDistance = 0.1f;
 
-        bool grounded = false;
-        RaycastHit hit;
+        int groundedCorners = 0;
 
-        // Perform raycasts from each defined corner
         foreach (GameObject cornerObject in corners)
         {
-            if (cornerObject == null) continue; // Skip if GameObject is null
+            if (cornerObject == null) continue;
 
             Vector3 rayOrigin = cornerObject.transform.position;
-            if (Physics.Raycast(rayOrigin, rayDirection, out hit, rayDistance))
+            if (Physics.Raycast(rayOrigin, rayDirection, out RaycastHit hit, rayDistance))
             {
                 if (hit.collider.CompareTag("Ground") || hit.collider.CompareTag("Unit"))
                 {
-                    grounded = true;
-                    break; // Found ground, no need to check further
+                    groundedCorners++;
                 }
             }
         }
-        Debug.Log(grounded);
-        // If not grounded, move the unit downwards
-        if (!grounded)
+
+        IsGrounded = groundedCorners > 0;
+        AreAllCornersGrounded = groundedCorners == corners.Count;
+        
+        // This part handles re-enabling the agent if it was falling but is now grounded again.
+        // It should only run in individual mode to avoid conflicts with formation logic.
+        if (IsGrounded && currentMode == FormationMode.Individual)
         {
-            transform.position += Vector3.down * fallSpeed * Time.deltaTime;
-            if (agent.enabled) // If agent is enabled but not grounded, disable it
-            {
-                EnableNavMeshAgent(false);
-            }
-        }
-        else // If grounded
-        {
-            if (!agent.enabled) // If agent is disabled but grounded, enable it
+            if (!agent.enabled)
             {
                 EnableNavMeshAgent(true);
-                // Optionally, you might want to reset path or other agent properties here
-                // agent.ResetPath();
             }
         }
     }

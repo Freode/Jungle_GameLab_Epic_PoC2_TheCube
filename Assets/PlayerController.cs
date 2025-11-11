@@ -5,8 +5,6 @@ using UnityEngine.InputSystem;
 using UnityEngine.AI;
 using System.Linq;
 
-public enum FormationMode { None, Mode2D, Mode3D, LadderMode }
-
 public class FormationSlot
 {
     public Unit unit;
@@ -20,6 +18,7 @@ public class PlayerController : MonoBehaviour
 
     public Camera cam;
     public LineDrawer lineDrawer;
+    public FormationGroup formationGroup; // Reference to the FormationGroup component in the scene
 
     public List<Unit> units = new List<Unit>();
     public List<Unit> selectedUnits = new List<Unit>();
@@ -29,9 +28,8 @@ public class PlayerController : MonoBehaviour
     private bool isDragging;
     private Texture2D selectionBoxTexture;
 
-    private FormationMode currentMode = FormationMode.None;
+    private FormationMode currentMode = FormationMode.Individual;
     private List<FormationSlot> formationSlots = new List<FormationSlot>();
-    private FormationGroup currentFormationGroup;
     private GameObject currentFormationParent;
     private bool isSwitchingFormation = false;
     private bool isExecutingSkill = false;
@@ -54,6 +52,18 @@ public class PlayerController : MonoBehaviour
         foreach (GameObject go in unitGOs)
         {
             units.Add(go.GetComponent<Unit>());
+        }
+
+        // At the start, all units are in the group for individual fall checks
+        if (formationGroup != null)
+        {
+            formationGroup.units.AddRange(units);
+            formationGroup.currentMode = FormationMode.Individual;
+        }
+
+        foreach (var unit in units)
+        {
+            unit.currentMode = FormationMode.Individual;
         }
     }
 
@@ -95,28 +105,31 @@ public class PlayerController : MonoBehaviour
         {
             MoveSelectedUnits();
         }
-        
+
+        // Formation Mode Switching
+        if (Keyboard.current.digit0Key.wasPressedThisFrame)
+        {
+            StartCoroutine(SwitchFormation(FormationMode.Individual));
+        }
         if (Keyboard.current.digit1Key.wasPressedThisFrame)
         {
             if (selectedUnits.Count > 0)
             {
-                StartCoroutine(SwitchFormation(FormationMode.Mode2D));
+                StartCoroutine(SwitchFormation(FormationMode.Cluster));
             }
         }
-        
         if (Keyboard.current.digit2Key.wasPressedThisFrame)
         {
             if (selectedUnits.Count > 1)
             {
-                StartCoroutine(SwitchFormation(FormationMode.Mode3D));
+                StartCoroutine(SwitchFormation(FormationMode.Solid));
             }
         }
-        
         if (Keyboard.current.digit3Key.wasPressedThisFrame)
         {
             if (selectedUnits.Count > 0)
             {
-                StartCoroutine(SwitchFormation(FormationMode.LadderMode));
+                StartCoroutine(SwitchFormation(FormationMode.Ladder));
             }
         }
 
@@ -132,13 +145,13 @@ public class PlayerController : MonoBehaviour
 
         switch (currentMode)
         {
-            case FormationMode.Mode2D:
+            case FormationMode.Cluster:
                 StartCoroutine(ExecuteMode2DSkill());
                 break;
-            case FormationMode.Mode3D:
-                Debug.Log("Mode 3D Skill Activated (Not Implemented)");
+            case FormationMode.Solid:
+                Debug.Log("Solid Mode Skill Activated (Not Implemented)");
                 break;
-            case FormationMode.LadderMode:
+            case FormationMode.Ladder:
                 StartCoroutine(ExecuteLadderModeSkill());
                 break;
         }
@@ -175,13 +188,14 @@ public class PlayerController : MonoBehaviour
         // 2. Un-parent the top cube
         topCube.transform.parent = null;
 
-        // 3. Start the new animation coroutine and wait for it
-        yield return StartCoroutine(topCube.MoveForwardAndFall(topCubeTargetWorldPos, 15f, 20f));
-
-        // 4. Deselect the unit after its movement is complete
+        // Immediately deselect the unit to remove it from the cluster
         DeselectUnit(topCube);
 
-        isExecutingSkill = false;
+        // Skill execution is complete, player can now move other units.
+        isExecutingSkill = false; 
+
+        // 3. Start the new animation coroutine and wait for it
+        yield return StartCoroutine(topCube.MoveForwardAndFall(topCubeTargetWorldPos, 15f, 20f));
     }
 
     IEnumerator ExecuteMode2DSkill()
@@ -197,7 +211,7 @@ public class PlayerController : MonoBehaviour
             }
         }
 
-        // Wait for one frame to ensure agents have stopped before issuing a new command
+        // Wait for one frame to ensure agents have stopped
         yield return null;
 
         // 1. Calculate center and count
@@ -213,7 +227,7 @@ public class PlayerController : MonoBehaviour
         }
         if (unitCount > 0) center /= unitCount;
 
-        // 2. Calculate dynamic values based on unit count using ratio-based scaling
+        // 2. Dynamic values
         const float baseUnitCount = 8f;
         const float baseWaitTime = 0.45f;
         const float baseSpeed = 22.5f;
@@ -230,11 +244,10 @@ public class PlayerController : MonoBehaviour
         {
             if (slot.unit != null)
             {
-                slot.unit.MoveTo(center, gatherSpeed); // Start moving towards center
+                slot.unit.MoveTo(center, gatherSpeed);
             }
         }
 
-        // Wait a dynamic time for them to gather
         yield return new WaitForSeconds(dynamicWaitTime); 
 
         // 4. Spread phase
@@ -248,7 +261,6 @@ public class PlayerController : MonoBehaviour
             }
         }
 
-        // Wait for all units to spread back out to their positions
         foreach (var co in spreadCoroutines)
         {
             if (co != null) yield return co;
@@ -260,24 +272,54 @@ public class PlayerController : MonoBehaviour
 
     IEnumerator SwitchFormation(FormationMode newMode)
     {
-        if (isSwitchingFormation || currentMode == newMode) yield break;
+        if (isSwitchingFormation) yield break;
+        if (newMode != FormationMode.Individual && currentMode == newMode) yield break;
 
         isSwitchingFormation = true;
 
         FormationMode previousMode = currentMode;
-        CleanupPreviousFormation();
+        CleanupPreviousFormation(previousMode);
 
         currentMode = newMode;
+        foreach (var unit in units)
+        {
+            unit.currentMode = newMode;
+        }
+
+        if (formationGroup == null)
+        {
+            Debug.LogError("FormationGroup reference is not assigned in PlayerController. Please assign the FormationManager GameObject to the 'Formation Group' field in the Inspector.", this);
+            isSwitchingFormation = false;
+            yield break;
+        }
+        
+        formationGroup.currentMode = newMode;
+        formationGroup.units.Clear();
+        if (newMode == FormationMode.Individual)
+        {
+            formationGroup.units.AddRange(this.units);
+        }
+        else
+        {
+            formationGroup.units.AddRange(selectedUnits);
+        }
+
+        if (newMode == FormationMode.Individual)
+        {
+            isSwitchingFormation = false;
+            yield break;
+        }
+
         List<Coroutine> formationCoroutines = new List<Coroutine>();
         switch (newMode)
         {
-            case FormationMode.Mode2D:
+            case FormationMode.Cluster:
                 formationCoroutines = UpdateFormation(previousMode);
                 break;
-            case FormationMode.Mode3D:
+            case FormationMode.Solid:
                 formationCoroutines = Update3DFormation(previousMode);
                 break;
-            case FormationMode.LadderMode:
+            case FormationMode.Ladder:
                 formationCoroutines = UpdateLadderFormation(previousMode);
                 break;
         }
@@ -293,11 +335,9 @@ public class PlayerController : MonoBehaviour
         isSwitchingFormation = false;
     }
 
-    void CleanupPreviousFormation()
+    void CleanupPreviousFormation(FormationMode modeToBreak)
     {
-        FormationMode modeToBreak = currentMode;
-
-        if (modeToBreak == FormationMode.Mode3D || modeToBreak == FormationMode.LadderMode)
+        if (modeToBreak == FormationMode.Solid || modeToBreak == FormationMode.Ladder)
         {
             if (currentFormationParent != null)
             {
@@ -314,47 +354,23 @@ public class PlayerController : MonoBehaviour
                     unit.EnableNavMeshAgent(true);
                     unit.UnlockRotation();
                     unit.ClearLeader();
-                    unit.IsLeader = false;
                 }
                 
                 Destroy(currentFormationParent);
                 currentFormationParent = null;
             }
         }
-        else if (modeToBreak == FormationMode.Mode2D)
-        {
-            if (currentFormationGroup != null)
-            {
-                foreach (var unit in currentFormationGroup.units)
-                {
-                    if (unit != null)
-                    {
-                        unit.UnlockRotation();
-                        unit.formationGroup = null;
-                    }
-                }
-            }
-        }
         
-        if (currentFormationGroup != null)
-        {
-            currentFormationGroup.units.Clear();
-            currentFormationGroup = null;
-        }
         formationSlots.Clear();
         if (lineDrawer != null) lineDrawer.ClearLines();
-
-        currentMode = FormationMode.None;
     }
 
-    List<Coroutine> UpdateFormation(FormationMode previousMode = FormationMode.None)
+    List<Coroutine> UpdateFormation(FormationMode previousMode)
     {
         if (selectedUnits.Count < 1) return new List<Coroutine>();
 
         var coroutines = new List<Coroutine>();
-        currentFormationGroup = new FormationGroup();
-        currentFormationGroup.units.AddRange(selectedUnits);
-
+        
         Vector3 center = Vector3.zero;
         foreach (Unit unit in selectedUnits)
         {
@@ -366,7 +382,6 @@ public class PlayerController : MonoBehaviour
         {
             foreach (Unit unit in selectedUnits)
             {
-                unit.LockRotation();
                 formationSlots.Add(new FormationSlot { unit = unit, offset = unit.transform.position - center, rotation = unit.transform.rotation });
             }
             lineDrawer.DrawLines(selectedUnits);
@@ -379,7 +394,7 @@ public class PlayerController : MonoBehaviour
         float radius = desiredSideLength / (2 * Mathf.Sin(Mathf.PI / unitCount));
         float angleIncrement = 360f / unitCount;
 
-        bool useFallAnimation = (previousMode == FormationMode.Mode3D || previousMode == FormationMode.LadderMode);
+        bool useFallAnimation = (previousMode == FormationMode.Solid || previousMode == FormationMode.Ladder);
 
         formationSlots.Clear();
         for (int i = 0; i < unitCount; i++)
@@ -404,7 +419,6 @@ public class PlayerController : MonoBehaviour
             }
 
             coroutines.Add(currentUnit.RotateTo(lookDir));
-            // currentUnit.LockRotation(); // Removed to allow NavMeshAgent to handle rotation
             formationSlots.Add(new FormationSlot { unit = selectedUnits[i], offset = targetPos - center, rotation = targetRot });
         }
         lineDrawer.DrawLines(selectedUnits);
@@ -474,7 +488,7 @@ public class PlayerController : MonoBehaviour
         target.localPosition = localPosition;
     }
 
-    List<Coroutine> Update3DFormation(FormationMode previousMode = FormationMode.None)
+    List<Coroutine> Update3DFormation(FormationMode previousMode)
     {
         if (selectedUnits.Count < 2) return new List<Coroutine>();
 
@@ -513,6 +527,7 @@ public class PlayerController : MonoBehaviour
             }
 
             unit.StopAllCoroutines();
+            unit.ClearLeader(); // Clear any previous leader to prevent movement conflicts.
             unit.EnableNavMeshAgent(false);
             unit.transform.parent = currentFormationParent.transform;
             
@@ -524,7 +539,7 @@ public class PlayerController : MonoBehaviour
         return coroutines;
     }
 
-    List<Coroutine> UpdateLadderFormation(FormationMode previousMode = FormationMode.None)
+    List<Coroutine> UpdateLadderFormation(FormationMode previousMode)
     {
         if (selectedUnits.Count < 1) return new List<Coroutine>();
 
@@ -570,13 +585,14 @@ public class PlayerController : MonoBehaviour
 
     void MoveSelectedUnits()
     {
+        Debug.Log($"[Debug] Move command received. Selected Units: {selectedUnits.Count}, Current Mode: {currentMode}");
         if (selectedUnits.Count == 0) return;
         Ray ray = cam.ScreenPointToRay(Mouse.current.position.ReadValue());
         RaycastHit hit;
 
         if (Physics.Raycast(ray, out hit))
         {
-            if (currentMode == FormationMode.Mode3D || currentMode == FormationMode.LadderMode)
+            if (currentMode == FormationMode.Solid || currentMode == FormationMode.Ladder)
             {
                 if (currentFormationParent != null)
                 {
@@ -587,7 +603,7 @@ public class PlayerController : MonoBehaviour
                     }
                 }
             }
-            else if (currentMode == FormationMode.Mode2D)
+            else if (currentMode == FormationMode.Cluster)
             {
                 Vector3 newCenter = hit.point;
                 foreach (var slot in formationSlots)
@@ -595,10 +611,9 @@ public class PlayerController : MonoBehaviour
                     if (slot.unit == null) continue;
                     Vector3 targetPos = newCenter + slot.offset;
                     slot.unit.MoveTo(targetPos);
-                    // slot.unit.transform.rotation = slot.rotation; // Removed to allow NavMeshAgent to handle rotation
                 }
             }
-            else
+            else // Individual mode
             {
                 int unitCount = selectedUnits.Count;
                 if (unitCount == 0) return;
@@ -619,26 +634,39 @@ public class PlayerController : MonoBehaviour
     IEnumerator RebuildCurrentFormation()
     {
         if (isSwitchingFormation) yield break;
+
+        // If the selection is now empty, don't rebuild. Instead, break the formation.
+        if (selectedUnits.Count == 0)
+        {
+            StartCoroutine(SwitchFormation(FormationMode.Individual));
+            yield break;
+        }
         
         isSwitchingFormation = true;
 
         FormationMode modeToRebuild = currentMode;
         
-        // Rebuilding shouldn't have a break animation, so we just clean the state.
-        CleanupPreviousFormation();
+        CleanupPreviousFormation(modeToRebuild);
         currentMode = modeToRebuild;
+        if (formationGroup != null)
+        {
+            formationGroup.currentMode = modeToRebuild;
+            formationGroup.units.Clear();
+            formationGroup.units.AddRange(selectedUnits);
+        }
+
 
         List<Coroutine> formationCoroutines = new List<Coroutine>();
         switch (currentMode)
         {
-            case FormationMode.Mode2D:
-                if (selectedUnits.Count > 0) formationCoroutines = UpdateFormation();
+            case FormationMode.Cluster:
+                if (selectedUnits.Count > 0) formationCoroutines = UpdateFormation(FormationMode.Individual);
                 break;
-            case FormationMode.Mode3D:
-                if (selectedUnits.Count > 1) formationCoroutines = Update3DFormation();
+            case FormationMode.Solid:
+                if (selectedUnits.Count > 1) formationCoroutines = Update3DFormation(FormationMode.Individual);
                 break;
-            case FormationMode.LadderMode:
-                if (selectedUnits.Count > 0) formationCoroutines = UpdateLadderFormation();
+            case FormationMode.Ladder:
+                if (selectedUnits.Count > 0) formationCoroutines = UpdateLadderFormation(FormationMode.Individual);
                 break;
         }
 
@@ -686,7 +714,7 @@ public class PlayerController : MonoBehaviour
         }
 
         var postSelection = new HashSet<Unit>(selectedUnits);
-        if (!preSelection.SetEquals(postSelection) && currentMode != FormationMode.None)
+        if (!preSelection.SetEquals(postSelection) && currentMode != FormationMode.Individual)
         {
             StartCoroutine(RebuildCurrentFormation());
         }
@@ -727,7 +755,7 @@ public class PlayerController : MonoBehaviour
         }
         
         var postSelection = new HashSet<Unit>(selectedUnits);
-        if (!preSelection.SetEquals(postSelection) && currentMode != FormationMode.None)
+        if (!preSelection.SetEquals(postSelection) && currentMode != FormationMode.Individual)
         {
             StartCoroutine(RebuildCurrentFormation());
         }
@@ -748,166 +776,22 @@ public class PlayerController : MonoBehaviour
         {
             selectedUnits.Remove(unit);
             unit.ToggleSelection(false);
-            if (currentFormationGroup != null)
+            if (formationGroup != null)
             {
-                currentFormationGroup.units.Remove(unit);
+                formationGroup.units.Remove(unit);
             }
         }
     }
 
     void ClearSelection()
     {
-        if (selectedUnits.Count == 0 && currentMode == FormationMode.None) return;
+        if (selectedUnits.Count == 0 && currentMode == FormationMode.Individual) return;
         
         foreach (Unit unit in selectedUnits)
         {
             unit.ToggleSelection(false);
         }
         selectedUnits.Clear();
-        StartCoroutine(BreakFormation(true, FormationMode.None));
-    }
-
-    private void TeleportAndResetUnits(List<Unit> unitsToReset, Vector3 center)
-    {
-        for (int i = 0; i < unitsToReset.Count; i++)
-        {
-            Unit unit = unitsToReset[i];
-            if (unit == null) continue;
-            float angleRad = Mathf.Deg2Rad * (360f / unitsToReset.Count * i);
-            Vector3 scatterTarget = center + new Vector3(Mathf.Cos(angleRad), 0, Mathf.Sin(angleRad)) * 1.5f;
-            
-            unit.StopAllCoroutines();
-            unit.transform.position = scatterTarget;
-            unit.EnableNavMeshAgent(true);
-            unit.SetNavMeshAgentControl(true);
-            unit.UnlockRotation();
-            unit.ClearLeader();
-            unit.IsLeader = false;
-            unit.formationGroup = null;
-        }
-    }
-
-    IEnumerator BreakFormation(bool animate, FormationMode nextMode = FormationMode.None)
-    {
-        FormationMode modeToBreak = currentMode;
-        currentMode = FormationMode.None;
-
-        if (modeToBreak == FormationMode.Mode3D || modeToBreak == FormationMode.LadderMode)
-        {
-            if (currentFormationParent != null)
-            {
-                List<Unit> unitsToBreak = new List<Unit>();
-                foreach (Transform child in currentFormationParent.transform)
-                {
-                    Unit unit = child.GetComponent<Unit>();
-                    if (unit != null) unitsToBreak.Add(unit);
-                }
-
-                foreach (var unit in unitsToBreak) unit.transform.parent = null;
-                Destroy(currentFormationParent);
-                currentFormationParent = null;
-
-                Vector3 center = Vector3.zero;
-                if (unitsToBreak.Count > 0)
-                {
-                    foreach(var unit in unitsToBreak) center += unit.transform.position;
-                    center /= unitsToBreak.Count;
-                }
-                center.y = 0.0f; // Calculate center based on ground plane for consistency
-
-                // Skip animation if the next mode is LadderMode
-                bool useAnimation = animate && nextMode != FormationMode.LadderMode;
-
-                if (useAnimation)
-                {
-                    List<Coroutine> runningBreaks = new List<Coroutine>();
-                    
-                    if (modeToBreak == FormationMode.LadderMode && nextMode == FormationMode.Mode3D)
-                    {
-                        List<Vector3> futureOffsets = Get3DFormationOffsets(unitsToBreak.Count);
-                        for (int i = 0; i < unitsToBreak.Count; i++)
-                        {
-                            Unit unit = unitsToBreak[i];
-                            if (unit == null) continue;
-
-                            Vector3 finalOffset = futureOffsets[i];
-                            if (Mathf.Approximately(finalOffset.y, 0))
-                            {
-                                finalOffset.y += CUBE_SIZE / 2.0f;
-                            }
-                            
-                            Vector3 scatterTarget = center + finalOffset;
-                            runningBreaks.Add(StartCoroutine(unit.FallAndScatter(scatterTarget, 4f)));
-                        }
-                    }
-                    else if (modeToBreak == FormationMode.LadderMode && nextMode == FormationMode.Mode2D)
-                    {
-                        int unitCount = unitsToBreak.Count;
-                        if (unitCount > 0)
-                        {
-                            const float baseSideLength = 3.0f;
-                            float desiredSideLength = baseSideLength + (unitCount * 0.2f);
-                            float radius = desiredSideLength / (2 * Mathf.Sin(Mathf.PI / unitCount));
-                            float angleIncrement = 360f / unitCount;
-
-                            for (int i = 0; i < unitCount; i++)
-                            {
-                                Unit unit = unitsToBreak[i];
-                                if (unit == null) continue;
-
-                                float angleRad = Mathf.Deg2Rad * (angleIncrement * i);
-                                float x = Mathf.Cos(angleRad) * radius;
-                                float z = Mathf.Sin(angleRad) * radius;
-                                Vector3 scatterTarget = center + new Vector3(x, CUBE_SIZE / 2.0f, z);
-                                
-                                runningBreaks.Add(StartCoroutine(unit.FallAndScatter(scatterTarget, 4f)));
-                            }
-                        }
-                    }
-                    else // Default circular scatter
-                    {
-                        for (int i = 0; i < unitsToBreak.Count; i++)
-                        {
-                            Unit unit = unitsToBreak[i];
-                            if (unit == null) continue;
-                            float angleRad = Mathf.Deg2Rad * (360f / unitsToBreak.Count * i);
-                            Vector3 scatterTarget = center + new Vector3(Mathf.Cos(angleRad), CUBE_SIZE / 2.0f, Mathf.Sin(angleRad)) * 1.5f;
-                            runningBreaks.Add(StartCoroutine(unit.FallAndScatter(scatterTarget, 4f)));
-                        }
-                    }
-
-                    foreach (var coroutine in runningBreaks)
-                    {
-                        yield return coroutine;
-                    }
-                }
-                else
-                {
-                    TeleportAndResetUnits(unitsToBreak, center);
-                }
-            }
-        }
-        else if (modeToBreak == FormationMode.Mode2D)
-        {
-            if (currentFormationGroup != null)
-            {
-                foreach (var unit in currentFormationGroup.units)
-                {
-                    if (unit != null)
-                    {
-                        unit.UnlockRotation();
-                        unit.formationGroup = null;
-                    }
-                }
-            }
-        }
-        
-        if (currentFormationGroup != null)
-        {
-            currentFormationGroup.units.Clear();
-            currentFormationGroup = null;
-        }
-        formationSlots.Clear();
-        if (lineDrawer != null) lineDrawer.ClearLines();
+        StartCoroutine(SwitchFormation(FormationMode.Individual));
     }
 }

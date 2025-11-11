@@ -126,7 +126,7 @@ public class PlayerController : MonoBehaviour
 
         isSwitchingFormation = true;
 
-        yield return StartCoroutine(BreakFormation(true, newMode));
+        CleanupPreviousFormation();
 
         currentMode = newMode;
         switch (newMode)
@@ -143,6 +143,60 @@ public class PlayerController : MonoBehaviour
         }
 
         isSwitchingFormation = false;
+    }
+
+    void CleanupPreviousFormation()
+    {
+        FormationMode modeToBreak = currentMode;
+
+        if (modeToBreak == FormationMode.Mode3D || modeToBreak == FormationMode.LadderMode)
+        {
+            if (currentFormationParent != null)
+            {
+                List<Unit> unitsToUnparent = new List<Unit>();
+                foreach (Transform child in currentFormationParent.transform)
+                {
+                    Unit unit = child.GetComponent<Unit>();
+                    if (unit != null) unitsToUnparent.Add(unit);
+                }
+
+                foreach (var unit in unitsToUnparent)
+                {
+                    unit.transform.parent = null;
+                    unit.EnableNavMeshAgent(true);
+                    unit.UnlockRotation();
+                    unit.ClearLeader();
+                    unit.IsLeader = false;
+                }
+                
+                Destroy(currentFormationParent);
+                currentFormationParent = null;
+            }
+        }
+        else if (modeToBreak == FormationMode.Mode2D)
+        {
+            if (currentFormationGroup != null)
+            {
+                foreach (var unit in currentFormationGroup.units)
+                {
+                    if (unit != null)
+                    {
+                        unit.UnlockRotation();
+                        unit.formationGroup = null;
+                    }
+                }
+            }
+        }
+        
+        if (currentFormationGroup != null)
+        {
+            currentFormationGroup.units.Clear();
+            currentFormationGroup = null;
+        }
+        formationSlots.Clear();
+        if (lineDrawer != null) lineDrawer.ClearLines();
+
+        currentMode = FormationMode.None;
     }
 
     void UpdateFormation()

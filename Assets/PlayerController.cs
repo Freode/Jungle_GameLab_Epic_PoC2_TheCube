@@ -34,6 +34,7 @@ public class PlayerController : MonoBehaviour
     private FormationGroup currentFormationGroup;
     private GameObject currentFormationParent;
     private bool isSwitchingFormation = false;
+    private bool isExecutingSkill = false;
 
     private const float CUBE_SIZE = 1.0f;
 
@@ -73,7 +74,7 @@ public class PlayerController : MonoBehaviour
 
     void Update()
     {
-        if (isSwitchingFormation) return;
+        if (isSwitchingFormation || isExecutingSkill) return;
 
         if (Mouse.current.leftButton.wasPressedThisFrame)
         {
@@ -118,7 +119,144 @@ public class PlayerController : MonoBehaviour
                 StartCoroutine(SwitchFormation(FormationMode.LadderMode));
             }
         }
+
+        if (Keyboard.current.qKey.wasPressedThisFrame)
+        {
+            ExecuteFormationSkill();
+        }
     }
+
+    void ExecuteFormationSkill()
+    {
+        if (selectedUnits.Count == 0) return;
+
+        switch (currentMode)
+        {
+            case FormationMode.Mode2D:
+                StartCoroutine(ExecuteMode2DSkill());
+                break;
+            case FormationMode.Mode3D:
+                Debug.Log("Mode 3D Skill Activated (Not Implemented)");
+                break;
+            case FormationMode.LadderMode:
+                StartCoroutine(ExecuteLadderModeSkill());
+                break;
+        }
+    }
+
+    IEnumerator ExecuteLadderModeSkill()
+    {
+        isExecutingSkill = true;
+
+        Unit topCube = null;
+        float max_y = float.MinValue;
+
+        if (currentFormationParent != null)
+        {
+            foreach (Transform child in currentFormationParent.transform)
+            {
+                if (child.localPosition.y > max_y)
+                {
+                    max_y = child.localPosition.y;
+                    topCube = child.GetComponent<Unit>();
+                }
+            }
+        }
+
+        if (topCube == null)
+        {
+            isExecutingSkill = false;
+            yield break;
+        }
+
+        // 1. Calculate the top cube's target world position
+        Vector3 topCubeTargetWorldPos = topCube.transform.position + topCube.transform.forward * CUBE_SIZE;
+
+        // 2. Un-parent the top cube
+        topCube.transform.parent = null;
+
+        // 3. Start the new animation coroutine and wait for it
+        yield return StartCoroutine(topCube.MoveForwardAndFall(topCubeTargetWorldPos, 15f, 20f));
+
+        // 4. Deselect the unit after its movement is complete
+        DeselectUnit(topCube);
+
+        isExecutingSkill = false;
+    }
+
+    IEnumerator ExecuteMode2DSkill()
+    {
+        isExecutingSkill = true;
+
+        // Stop all units before starting the skill
+        foreach (var slot in formationSlots)
+        {
+            if (slot.unit != null)
+            {
+                slot.unit.StopMovement();
+            }
+        }
+
+        // Wait for one frame to ensure agents have stopped before issuing a new command
+        yield return null;
+
+        // 1. Calculate center and count
+        Vector3 center = Vector3.zero;
+        int unitCount = 0;
+        foreach (var slot in formationSlots)
+        {
+            if (slot.unit != null)
+            {
+                center += slot.unit.transform.position;
+                unitCount++;
+            }
+        }
+        if (unitCount > 0) center /= unitCount;
+
+        // 2. Calculate dynamic values based on unit count using ratio-based scaling
+        const float baseUnitCount = 8f;
+        const float baseWaitTime = 0.45f;
+        const float baseSpeed = 22.5f;
+        
+        float scalingUnitCount = Mathf.Clamp(unitCount, 3, 8);
+        float scalingFactor = scalingUnitCount / baseUnitCount;
+
+        float dynamicWaitTime = baseWaitTime * scalingFactor;
+        float dynamicSpreadSpeed = baseSpeed * scalingFactor;
+        float gatherSpeed = 7.5f;
+
+        // 3. Gather phase
+        foreach (var slot in formationSlots)
+        {
+            if (slot.unit != null)
+            {
+                slot.unit.MoveTo(center, gatherSpeed); // Start moving towards center
+            }
+        }
+
+        // Wait a dynamic time for them to gather
+        yield return new WaitForSeconds(dynamicWaitTime); 
+
+        // 4. Spread phase
+        List<Coroutine> spreadCoroutines = new List<Coroutine>();
+        foreach (var slot in formationSlots)
+        {
+            if (slot.unit != null)
+            {
+                Vector3 originalPos = center + slot.offset;
+                spreadCoroutines.Add(slot.unit.MoveTo(originalPos, dynamicSpreadSpeed));
+            }
+        }
+
+        // Wait for all units to spread back out to their positions
+        foreach (var co in spreadCoroutines)
+        {
+            if (co != null) yield return co;
+        }
+
+        isExecutingSkill = false;
+    }
+
 
     IEnumerator SwitchFormation(FormationMode newMode)
     {

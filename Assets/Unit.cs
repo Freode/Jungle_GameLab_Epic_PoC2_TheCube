@@ -12,6 +12,7 @@ public class Unit : MonoBehaviour
     private Renderer rend;
     private float originalSpeed;
     private float originalAcceleration;
+    private const float CUBE_SIZE = 1.0f;
 
     void Awake()
     {
@@ -46,6 +47,17 @@ public class Unit : MonoBehaviour
             StopAllCoroutines(); // Stop any previous movement coroutine
             return StartCoroutine(SmoothMoveCoroutine(position, speedMultiplier));
         }
+    }
+
+    public void StopMovement()
+    {
+        if (agent.enabled)
+        {
+            agent.velocity = Vector3.zero;
+            agent.isStopped = true;
+            agent.ResetPath();
+        }
+        StopAllCoroutines();
     }
 
     private IEnumerator SmoothMoveCoroutine(Vector3 targetPosition, float speedMultiplier)
@@ -150,6 +162,33 @@ public class Unit : MonoBehaviour
         UnlockRotation();
         ClearLeader();
         IsLeader = false;
+    }
+
+    public IEnumerator MoveForwardAndFall(Vector3 targetAirPosition, float moveSpeed, float fallSpeed)
+    {
+        // Ensure agent is off
+        if (agent.enabled) EnableNavMeshAgent(false);
+
+        // 1. Move forward in the air
+        while (Vector3.Distance(transform.position, targetAirPosition) > 0.01f)
+        {
+            transform.position = Vector3.MoveTowards(transform.position, targetAirPosition, moveSpeed * Time.deltaTime);
+            yield return null;
+        }
+        transform.position = targetAirPosition;
+
+        // 2. Fall to the ground
+        Vector3 groundPosition = new Vector3(transform.position.x, CUBE_SIZE / 2.0f, transform.position.z);
+        while (Vector3.Distance(transform.position, groundPosition) > 0.01f)
+        {
+            transform.position = Vector3.MoveTowards(transform.position, groundPosition, fallSpeed * Time.deltaTime);
+            yield return null;
+        }
+        transform.position = groundPosition;
+
+        // 3. Enable agent on the ground
+        EnableNavMeshAgent(true);
+        UnlockRotation();
     }
 
     public bool IsLeader { get; set; } = false;

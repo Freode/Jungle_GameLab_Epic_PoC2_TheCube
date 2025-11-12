@@ -12,6 +12,7 @@ public class Unit : MonoBehaviour
     private Renderer rend;
     private float originalSpeed;
     private float originalAcceleration;
+    private float originalStoppingDistance; // Added to store the original stopping distance
     private const float CUBE_SIZE = 1.0f;
     public float fallSpeed = 5f;
 
@@ -36,6 +37,7 @@ public class Unit : MonoBehaviour
         rend = GetComponent<Renderer>();
         originalSpeed = agent.speed;
         originalAcceleration = agent.acceleration;
+        originalStoppingDistance = agent.stoppingDistance; // Store original stopping distance
     }
 
     public void ToggleSelection(bool selected)
@@ -50,13 +52,20 @@ public class Unit : MonoBehaviour
         {
             agent.speed = originalSpeed * speedMultiplier;
             agent.acceleration = originalAcceleration * speedMultiplier;
+            
+            // Temporarily set stopping distance to a very small value
+            agent.stoppingDistance = 0.01f; 
             agent.SetDestination(position);
 
             if (speedMultiplier > 1f)
             {
-                return StartCoroutine(ResetSpeedAfterArrival());
+                return StartCoroutine(ResetSpeedAndStoppingDistanceAfterArrival()); // New coroutine
             }
-            return null;
+            else
+            {
+                // If not using speed multiplier, still need to reset stopping distance
+                return StartCoroutine(ResetStoppingDistanceAfterArrival()); // New coroutine
+            }
         }
         else // Smoothly move to position if NavMeshAgent is disabled
         {
@@ -72,6 +81,7 @@ public class Unit : MonoBehaviour
             agent.velocity = Vector3.zero;
             agent.isStopped = true;
             agent.ResetPath();
+            agent.stoppingDistance = originalStoppingDistance; // Ensure stopping distance is reset on stop
         }
         StopAllCoroutines();
     }
@@ -87,7 +97,8 @@ public class Unit : MonoBehaviour
         transform.position = targetPosition;
     }
 
-    private IEnumerator ResetSpeedAfterArrival()
+    // Modified coroutine to also reset stoppingDistance
+    private IEnumerator ResetSpeedAndStoppingDistanceAfterArrival()
     {
         // Wait until the agent is close to the destination, but exit if the agent gets disabled.
         while (agent.enabled && (agent.pathPending || agent.remainingDistance > agent.stoppingDistance + 0.1f))
@@ -95,11 +106,28 @@ public class Unit : MonoBehaviour
             yield return null;
         }
 
-        // Only reset speed if the agent is still enabled and has reached its destination.
+        // Only reset speed and stopping distance if the agent is still enabled and has reached its destination.
         if (agent.enabled)
         {
             agent.speed = originalSpeed;
             agent.acceleration = originalAcceleration;
+            agent.stoppingDistance = originalStoppingDistance; // Restore original
+        }
+    }
+
+    // New coroutine for cases without speed multiplier, just resets stoppingDistance
+    private IEnumerator ResetStoppingDistanceAfterArrival()
+    {
+        // Wait until the agent is close to the destination, but exit if the agent gets disabled.
+        while (agent.enabled && (agent.pathPending || agent.remainingDistance > agent.stoppingDistance + 0.1f))
+        {
+            yield return null;
+        }
+
+        // Only reset stopping distance if the agent is still enabled and has reached its destination.
+        if (agent.enabled)
+        {
+            agent.stoppingDistance = originalStoppingDistance; // Restore original
         }
     }
 
@@ -138,6 +166,10 @@ public class Unit : MonoBehaviour
     public void EnableNavMeshAgent(bool enable)
     {
         agent.enabled = enable;
+        if (enable)
+        {
+            agent.Warp(transform.position); // Force agent to snap to current position on NavMesh
+        }
     }
 
     public void SetNavMeshAgentControl(bool enable)

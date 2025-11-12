@@ -20,6 +20,23 @@ public class PlayerController : MonoBehaviour
     public LineDrawer lineDrawer;
     public FormationGroup formationGroup; // Reference to the FormationGroup component in the scene
 
+    public float scrollSpeed = 10f;
+    public int edgeScrollSize = 20; // Pixels from the edge to activate scrolling
+    public float zoomSpeed = 5f;
+
+    // Skill Sphere properties
+    public float initialSkillSphereRadius = 0.5f;
+    public float maxSkillSphereRadius = 10f;
+    // public float skillSphereGrowthDuration = 0.5f; // This will be calculated dynamically
+    public float minSkillSphereGrowthDuration = 0.1f; // Fastest growth
+    public float maxSkillSphereGrowthDuration = 0.5f; // Slowest growth (current default)
+
+    public float skillKnockbackForce = 500f;
+
+    private GameObject skillSphereObject;
+    private SphereCollider skillSphereCollider;
+    private float currentSkillSphereRadius = 0f;
+
     public List<Unit> units = new List<Unit>();
     public List<Unit> selectedUnits = new List<Unit>();
 
@@ -136,6 +153,19 @@ public class PlayerController : MonoBehaviour
         if (Keyboard.current.qKey.wasPressedThisFrame)
         {
             ExecuteFormationSkill();
+        }
+
+        HandleCameraEdgeScrolling();
+
+        // Handle mouse wheel for camera Y-axis movement (zoom)
+        float scrollValue = Mouse.current.scroll.ReadValue().y;
+        if (scrollValue != 0)
+        {
+            Vector3 newCameraPosition = cam.transform.position;
+            newCameraPosition.y -= scrollValue * zoomSpeed * 50f * Time.deltaTime;
+            // Optional: Clamp Y position to prevent camera from going too high or too low
+            // newCameraPosition.y = Mathf.Clamp(newCameraPosition.y, minY, maxY);
+            cam.transform.position = newCameraPosition;
         }
     }
 
@@ -333,7 +363,7 @@ public class PlayerController : MonoBehaviour
                     Unit unit = unitsToBreak[i];
                     if (unit == null) continue;
                     float angleRad = Mathf.Deg2Rad * (360f / unitsToBreak.Count * i);
-                    Vector3 scatterTarget = center + new Vector3(Mathf.Cos(angleRad), CUBE_SIZE / 2.0f, Mathf.Sin(angleRad)) * 1.5f;
+                    Vector3 scatterTarget = center + new Vector3(Mathf.Cos(angleRad), CUBE_SIZE / 2.0f, Mathf.Sin(angleRad)) * 1.0f; // Reduced scatter distance
                     Vector3 scatterDirection = (scatterTarget - center).normalized; // Calculate direction
                     Debug.Log($"[Debug BreakFormation] Unit '{unit.gameObject.name}' scattering to {scatterTarget}");
                     runningAnimations.Add(StartCoroutine(unit.FallAndScatter(scatterTarget, 4f, scatterDirection)));
@@ -367,17 +397,18 @@ public class PlayerController : MonoBehaviour
     {
         isExecutingSkill = true;
 
-        // Stop all units before starting the skill
+        // Store initial positions before any movement for the skill
+        Dictionary<Unit, Vector3> initialUnitPositions = new Dictionary<Unit, Vector3>();
         foreach (var slot in formationSlots)
         {
             if (slot.unit != null)
             {
+                initialUnitPositions[slot.unit] = slot.unit.transform.position;
                 slot.unit.StopMovement();
             }
         }
 
-        // Wait for one frame to ensure agents have stopped
-        yield return null;
+        yield return null; // Wait for one frame to ensure agents have stopped
 
         // 1. Calculate center and count
         Vector3 center = Vector3.zero;
@@ -395,7 +426,7 @@ public class PlayerController : MonoBehaviour
         // 2. Dynamic values
         const float baseUnitCount = 8f;
         const float baseWaitTime = 0.45f;
-        const float baseSpeed = 22.5f;
+        const float baseSpeed = 45f;
         
         float scalingUnitCount = Mathf.Clamp(unitCount, 3, 8);
         float scalingFactor = scalingUnitCount / baseUnitCount;
@@ -415,13 +446,32 @@ public class PlayerController : MonoBehaviour
 
         yield return new WaitForSeconds(dynamicWaitTime); 
 
+        // --- Skill Sphere Activation ---
+        skillSphereObject = new GameObject("SkillSphere");
+        skillSphereObject.transform.position = center;
+        skillSphereCollider = skillSphereObject.AddComponent<SphereCollider>();
+        skillSphereCollider.isTrigger = true; // Set as trigger for skill effect
+        skillSphereCollider.radius = initialSkillSphereRadius;
+        currentSkillSphereRadius = initialSkillSphereRadius;
+        skillSphereObject.SetActive(true); // Activate the sphere
+
+        SkillSphereHandler handler = skillSphereObject.AddComponent<SkillSphereHandler>();
+        handler.playerN = unitCount;
+        handler.knockbackForce = skillKnockbackForce;
+        handler.playerController = this; // Pass the current PlayerController instance
+
+        float dynamicSkillSphereGrowthDuration = Mathf.Lerp(maxSkillSphereGrowthDuration, minSkillSphereGrowthDuration, scalingFactor);
+        StartCoroutine(GrowSkillSphere(dynamicSkillSphereGrowthDuration));
+        // --- End Skill Sphere Activation ---
+
         // 4. Spread phase
         List<Coroutine> spreadCoroutines = new List<Coroutine>();
         foreach (var slot in formationSlots)
         {
             if (slot.unit != null)
             {
-                Vector3 originalPos = center + slot.offset;
+                // Use the stored initial position for spreading
+                Vector3 originalPos = initialUnitPositions[slot.unit];
                 spreadCoroutines.Add(slot.unit.MoveTo(originalPos, dynamicSpreadSpeed));
             }
         }
@@ -431,11 +481,41 @@ public class PlayerController : MonoBehaviour
             if (co != null) yield return co;
         }
 
+        // --- Skill Sphere Deactivation ---
+        if (skillSphereObject != null)
+        {
+            Destroy(skillSphereObject);
+            skillSphereObject = null;
+            skillSphereCollider = null;
+            currentSkillSphereRadius = 0f;
+        }
+        // --- End Skill Sphere Deactivation ---
+
         isExecutingSkill = false;
     }
 
+    IEnumerator GrowSkillSphere(float duration)
+    {
+        float timer = 0f;
+        while (timer < duration)
+        {
+            timer += Time.deltaTime;
+            currentSkillSphereRadius = Mathf.Lerp(initialSkillSphereRadius, maxSkillSphereRadius, timer / duration);
+            if (skillSphereCollider != null)
+            {
+                skillSphereCollider.radius = currentSkillSphereRadius;
+            }
+            yield return null;
+        }
+        currentSkillSphereRadius = maxSkillSphereRadius; // Ensure it reaches max
+        if (skillSphereCollider != null)
+        {
+            skillSphereCollider.radius = currentSkillSphereRadius;
+        }
+    }
 
-    IEnumerator SwitchFormation(FormationMode newMode)
+
+    public IEnumerator SwitchFormation(FormationMode newMode)
     {
         if (isSwitchingFormation) yield break;
         if (newMode != FormationMode.Individual && currentMode == newMode) yield break;
@@ -480,6 +560,13 @@ public class PlayerController : MonoBehaviour
 
         if (newMode == FormationMode.Individual)
         {
+            // Explicitly clear selected units and deselect all visuals
+            foreach (var unit in selectedUnits) // Only iterate through currently selected units
+            {
+                if (unit != null) unit.ToggleSelection(false);
+            }
+            selectedUnits.Clear(); // Clear the list
+
             isSwitchingFormation = false;
             yield break;
         }
@@ -777,14 +864,24 @@ public class PlayerController : MonoBehaviour
             {
                 int unitCount = selectedUnits.Count;
                 if (unitCount == 0) return;
-                float angle = 360f / unitCount;
-                float radius = 1f;
-
+                
                 for (int i = 0; i < unitCount; i++)
                 {
-                    float x = Mathf.Cos(angle * i * Mathf.Deg2Rad) * radius;
-                    float z = Mathf.Sin(angle * i * Mathf.Deg2Rad) * radius;
-                    Vector3 targetPos = hit.point + new Vector3(x, 0, z);
+                    Vector3 targetPos;
+                    if (unitCount == 1)
+                    {
+                        targetPos = hit.point; // Move directly to hit point for single unit
+                    }
+                    else
+                    {
+                        float angle = 360f / unitCount;
+                        float radius = 1f;
+
+                        // Calculate spread position around hit.point
+                        float x = Mathf.Cos(angle * i * Mathf.Deg2Rad) * radius;
+                        float z = Mathf.Sin(angle * i * Mathf.Deg2Rad) * radius;
+                        targetPos = hit.point + new Vector3(x, 0, z);
+                    }
                     selectedUnits[i].MoveTo(targetPos);
                 }
             }
@@ -863,6 +960,7 @@ public class PlayerController : MonoBehaviour
             Unit unit = hit.collider.GetComponent<Unit>();
             if (unit != null)
             {
+                if (!unit.IsGrounded) return; // Do not select if the unit is falling/not grounded
                 if (!Keyboard.current.shiftKey.isPressed && !Keyboard.current.leftCtrlKey.isPressed)
                 {
                     ClearSelection();
@@ -916,6 +1014,7 @@ public class PlayerController : MonoBehaviour
             Vector3 screenPos = cam.WorldToScreenPoint(unit.transform.position);
             if (screenPos.z > 0 && selectionRect.Contains(new Vector2(screenPos.x, Screen.height - screenPos.y)))
             {
+                if (!unit.IsGrounded) continue; // Do not select if the unit is falling/not grounded
                 if (Keyboard.current.leftCtrlKey.isPressed)
                 {
                     if (selectedUnits.Contains(unit)) DeselectUnit(unit);
@@ -941,16 +1040,13 @@ public class PlayerController : MonoBehaviour
         }
     }
 
-    void DeselectUnit(Unit unit)
+    public void DeselectUnit(Unit unit)
     {
         if (selectedUnits.Contains(unit))
         {
             selectedUnits.Remove(unit);
             unit.ToggleSelection(false);
-            if (formationGroup != null)
-            {
-                formationGroup.units.Remove(unit);
-            }
+            // Removed: formationGroup.units.Remove(unit); as formationGroup.units.Clear() is called in FormationGroup.Update()
         }
     }
 
@@ -964,5 +1060,77 @@ public class PlayerController : MonoBehaviour
         }
         selectedUnits.Clear();
         StartCoroutine(SwitchFormation(FormationMode.Individual));
+    }
+
+    public void DisbandFormationWithoutAnimation(List<Unit> unitsToDisband)
+    {
+        foreach (var unit in unitsToDisband)
+        {
+            if (unit == null) continue;
+            unit.currentMode = FormationMode.Individual;
+            unit.StopMovement();
+            unit.ClearLeader();
+            unit.IsLeader = false;
+            unit.UnlockRotation();
+            unit.EnableNavMeshAgent(true);
+        }
+        currentMode = FormationMode.Individual;
+        formationSlots.Clear();
+        if (lineDrawer != null) lineDrawer.ClearLines();
+
+        // Rebuild selectedUnits based on actual unit selection state
+        selectedUnits.Clear(); // Clear the old list
+        foreach (var unit in units) // 'units' is the list of all units in the scene
+        {
+            if (unit != null && unit.isSelected) // Check if the unit is actually selected
+            {
+                selectedUnits.Add(unit);
+            }
+            else if (unit != null) // Ensure non-selected units are visually deselected
+            {
+                unit.ToggleSelection(false);
+            }
+        }
+    }
+
+    void HandleCameraEdgeScrolling()
+    {
+        Vector3 cameraMoveDirection = Vector3.zero;
+        Vector2 mousePosition = Mouse.current.position.ReadValue();
+
+        // Check horizontal edges (left/right) - relative to camera's right vector
+        if (mousePosition.x < edgeScrollSize)
+        {
+            cameraMoveDirection -= cam.transform.right; // Move left
+        }
+        else if (mousePosition.x > Screen.width - edgeScrollSize)
+        {
+            cameraMoveDirection += cam.transform.right; // Move right
+        }
+
+        // Check vertical edges (top/bottom) - along world's forward/backward (X-Z plane)
+        if (mousePosition.y < edgeScrollSize)
+        {
+            cameraMoveDirection += Vector3.forward; // Move forward (world Z+)
+        }
+        else if (mousePosition.y > Screen.height - edgeScrollSize)
+        {
+            cameraMoveDirection -= Vector3.forward; // Move backward (world Z-)
+        }
+
+        // Normalize the direction to ensure consistent speed for diagonal movement
+        if (cameraMoveDirection != Vector3.zero)
+        {
+            cam.transform.position += cameraMoveDirection.normalized * scrollSpeed * Time.deltaTime;
+        }
+    }
+
+    void OnDrawGizmos()
+    {
+        if (skillSphereObject != null && skillSphereCollider != null && skillSphereObject.activeSelf)
+        {
+            Gizmos.color = Color.red;
+            Gizmos.DrawWireSphere(skillSphereObject.transform.position, currentSkillSphereRadius);
+        }
     }
 }

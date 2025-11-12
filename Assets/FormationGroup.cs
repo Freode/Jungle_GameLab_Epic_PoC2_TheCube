@@ -29,6 +29,20 @@ public class FormationGroup : MonoBehaviour
         return true; // No grounded units were found
     }
 
+    // Helper method to check if any unit in the group is ungrounded
+    private bool IsAnyUnitUngrounded()
+    {
+        if (units.Count == 0) return false;
+        foreach (var unit in units)
+        {
+            if (!unit.IsGrounded)
+            {
+                return true; // Found an ungrounded unit
+            }
+        }
+        return false; // All units are grounded
+    }
+
     void Update()
     {
         if (units.Count == 0) return;
@@ -38,10 +52,44 @@ public class FormationGroup : MonoBehaviour
         switch (currentMode)
         {
             case FormationMode.Cluster:
-                // Fall if all units in the group are ungrounded.
-                if (AreAllUnitsUngrounded())
+                List<Unit> ungroundedUnits = new List<Unit>();
+                List<Unit> groundedUnits = new List<Unit>();
+
+                foreach (var unit in units)
                 {
-                    shouldFall = true;
+                    if (!unit.IsGrounded)
+                    {
+                        ungroundedUnits.Add(unit);
+                    }
+                    else
+                    {
+                        groundedUnits.Add(unit);
+                    }
+                }
+
+                if (ungroundedUnits.Count > 0)
+                {
+                    // 1. Let ungrounded units continue to fall (they are already in Individual mode or will be set to it)
+                    foreach (var unit in ungroundedUnits)
+                    {
+                        unit.currentMode = FormationMode.Individual;
+                        // Explicitly deselect the falling unit
+                        if (PlayerController.instance != null)
+                        {
+                            PlayerController.instance.DeselectUnit(unit);
+                        }
+                    }
+
+                    // 2. For grounded units, switch them to Individual mode without animation
+                    if (PlayerController.instance != null)
+                    {
+                        PlayerController.instance.DisbandFormationWithoutAnimation(groundedUnits);
+                    }
+
+                    // Clear the formationGroup's unit list as the cluster is broken
+                    units.Clear();
+                    // Also, set the currentMode of FormationGroup to Individual
+                    currentMode = FormationMode.Individual;
                 }
                 break;
 

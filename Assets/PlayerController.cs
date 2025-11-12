@@ -255,8 +255,6 @@ public class PlayerController : MonoBehaviour
 
     IEnumerator BreakFormation(FormationMode modeToBreak, bool animate, FormationMode nextMode = FormationMode.Individual)
     {
-        Debug.Log($"[Debug BreakFormation] Called. modeToBreak: {modeToBreak}, animate: {animate}, nextMode: {nextMode}");
-
         List<Unit> unitsToBreak = new List<Unit>();
         GameObject parentToDestroy = null; // Temporarily store parent reference
 
@@ -294,8 +292,6 @@ public class PlayerController : MonoBehaviour
             }
         }
 
-        Debug.Log($"[Debug BreakFormation] unitsToBreak count: {unitsToBreak.Count}");
-
         Vector3 center = Vector3.zero;
         if (unitsToBreak.Count > 0)
         {
@@ -306,12 +302,10 @@ public class PlayerController : MonoBehaviour
 
         if (animate)
         {
-            Debug.Log("[Debug BreakFormation] Animation requested.");
             List<Coroutine> runningAnimations = new List<Coroutine>();
             
             if (modeToBreak == FormationMode.Ladder && nextMode == FormationMode.Solid)
             {
-                Debug.Log("[Debug BreakFormation] Entering Ladder -> Solid animation.");
                 List<Vector3> futureOffsets = Get3DFormationOffsets(unitsToBreak.Count);
                 for (int i = 0; i < unitsToBreak.Count; i++)
                 {
@@ -331,7 +325,6 @@ public class PlayerController : MonoBehaviour
             }
             else if (modeToBreak == FormationMode.Ladder && nextMode == FormationMode.Cluster)
             {
-                Debug.Log("[Debug BreakFormation] Entering Ladder -> Cluster animation.");
                 int unitCount = unitsToBreak.Count;
                 if (unitCount > 0)
                 {
@@ -356,21 +349,32 @@ public class PlayerController : MonoBehaviour
             }
             else // Default circular scatter (This should be the most common case for breaking into Individual mode)
             {
-                Debug.Log("[Debug BreakFormation] Entering Default circular scatter animation.");
-
-                // If unitsToBreak comes from Cluster mode, it cannot be unitsToBreak and currentFormationParent.
-                // The current implementation of BreakFormation assumes units are unparented from currentFormationParent
-                // which is only for Solid and Ladder.
-                // For Cluster mode, the units are already free. We need to obtain the units from the previous formationGroup.units.
-
                 for (int i = 0; i < unitsToBreak.Count; i++)
                 {
                     Unit unit = unitsToBreak[i];
                     if (unit == null) continue;
                     float angleRad = Mathf.Deg2Rad * (360f / unitsToBreak.Count * i);
-                    Vector3 scatterTarget = center + new Vector3(Mathf.Cos(angleRad), CUBE_SIZE / 2.0f, Mathf.Sin(angleRad)) * 1.0f; // Reduced scatter distance
+                    
+                    // Dynamically find the ground level for scatter target using Raycast
+                    Vector3 scatterXZ = center + new Vector3(Mathf.Cos(angleRad), 0, Mathf.Sin(angleRad)) * 1.0f; // Calculate XZ part of scatter target
+                    Vector3 rayOrigin = new Vector3(scatterXZ.x, 100f, scatterXZ.z); // Start raycast high above the scatter point
+                    RaycastHit groundHit;
+                    float groundY = 0.0f; // Default ground if no hit
+
+                    Debug.DrawRay(rayOrigin, Vector3.down * 110f, Color.red, 5f); // Visualize raycast
+
+                    if (Physics.Raycast(rayOrigin, Vector3.down, out groundHit, Mathf.Infinity, LayerMask.GetMask("Ground", "Unit")))
+                    {
+                        groundY = groundHit.point.y;
+                        Debug.DrawLine(groundHit.point, groundHit.point + Vector3.up * 0.5f, Color.green, 5f); // Visualize hit point
+                    }
+                    else
+                    {
+                        Debug.LogWarning($"[PlayerController] BreakFormation: No ground found below scatter target for unit {unit.gameObject.name}. Falling to default Y=0.");
+                    }
+
+                    Vector3 scatterTarget = new Vector3(scatterXZ.x, groundY + CUBE_SIZE / 2.0f, scatterXZ.z); // Adjust Y for cube pivot
                     Vector3 scatterDirection = (scatterTarget - center).normalized; // Calculate direction
-                    Debug.Log($"[Debug BreakFormation] Unit '{unit.gameObject.name}' scattering to {scatterTarget}");
                     runningAnimations.Add(StartCoroutine(unit.FallAndScatter(scatterTarget, 4f, scatterDirection)));
                 }
             }
@@ -379,11 +383,9 @@ public class PlayerController : MonoBehaviour
             {
                 if (coroutine != null) yield return coroutine;
             }
-            Debug.Log("[Debug BreakFormation] All break animations completed.");
         }
         else // No animation, just reset
         {
-            Debug.Log("[Debug BreakFormation] No animation requested. Teleporting units.");
             TeleportAndResetUnits(unitsToBreak, center);
         }
         
@@ -391,7 +393,6 @@ public class PlayerController : MonoBehaviour
         if (parentToDestroy != null)
         {
             Destroy(parentToDestroy);
-            Debug.Log("[Debug BreakFormation] currentFormationParent destroyed.");
         }
 
         formationSlots.Clear();
@@ -445,7 +446,7 @@ public class PlayerController : MonoBehaviour
         {
             if (slot.unit != null)
             {
-                slot.unit.MoveTo(center, gatherSpeed);
+                StartCoroutine(slot.unit.MoveTo(center, gatherSpeed));
             }
         }
 
@@ -477,7 +478,7 @@ public class PlayerController : MonoBehaviour
             {
                 // Use the stored initial position for spreading
                 Vector3 originalPos = initialUnitPositions[slot.unit];
-                spreadCoroutines.Add(slot.unit.MoveTo(originalPos, dynamicSpreadSpeed));
+                spreadCoroutines.Add(StartCoroutine(slot.unit.MoveTo(originalPos, dynamicSpreadSpeed)));
             }
         }
 
@@ -532,6 +533,12 @@ public class PlayerController : MonoBehaviour
         }
 
         FormationMode previousMode = currentMode;
+
+        Vector3? previousParentPosition = null;
+        if ((previousMode == FormationMode.Solid || previousMode == FormationMode.Ladder) && currentFormationParent != null)
+        {
+            previousParentPosition = currentFormationParent.transform.position;
+        }
         
         // Perform non-animated cleanup first
         CleanupPreviousFormation(previousMode);
@@ -588,7 +595,7 @@ public class PlayerController : MonoBehaviour
         switch (newMode)
         {
             case FormationMode.Cluster:
-                formationCoroutines = UpdateFormation(previousMode);
+                formationCoroutines = UpdateFormation(previousMode, previousParentPosition);
                 break;
             case FormationMode.Solid:
                 formationCoroutines = Update3DFormation(previousMode);
@@ -619,8 +626,24 @@ public class PlayerController : MonoBehaviour
         {
             if (currentFormationParent != null)
             {
-                // Unparenting and destruction of currentFormationParent will now be handled by BreakFormation.
-                // currentFormationParent = null; // BreakFormation will handle setting to null after destruction
+                List<Unit> unitsToClean = new List<Unit>();
+                foreach (Transform child in currentFormationParent.transform)
+                {
+                    Unit unit = child.GetComponent<Unit>();
+                    if (unit != null)
+                    {
+                        unitsToClean.Add(unit);
+                    }
+                }
+
+                foreach (Unit unit in unitsToClean)
+                {
+                    unit.transform.parent = null;
+                    unit.UnlockRotation(); // Unlock rotation here
+                    unit.EnableNavMeshAgent(true); // Re-enable the agent
+                }
+                Destroy(currentFormationParent);
+                currentFormationParent = null;
             }
         }
         
@@ -628,7 +651,7 @@ public class PlayerController : MonoBehaviour
         if (lineDrawer != null) lineDrawer.ClearLines();
     }
 
-    List<Coroutine> UpdateFormation(FormationMode previousMode)
+    List<Coroutine> UpdateFormation(FormationMode previousMode, Vector3? previousParentPosition = null)
     {
         if (selectedUnits.Count < 1) return new List<Coroutine>();
 
@@ -670,16 +693,17 @@ public class PlayerController : MonoBehaviour
             Quaternion targetRot = Quaternion.LookRotation(lookDir);
 
             Unit currentUnit = selectedUnits[i];
-            if (useFallAnimation)
+            if (useFallAnimation && previousParentPosition.HasValue)
             {
-                Vector3 fallTarget = new Vector3(targetPos.x, currentUnit.transform.position.y, targetPos.z);
-                fallTarget.y = CUBE_SIZE / 2.0f;
-                Vector3 scatterDirection = (fallTarget - center).normalized; // Calculate direction
+                float targetY = previousParentPosition.Value.y + CUBE_SIZE / 2.0f;
+                Vector3 fallTargetXZ = center + new Vector3(x, 0, z);
+                Vector3 fallTarget = new Vector3(fallTargetXZ.x, targetY, fallTargetXZ.z);
+                Vector3 scatterDirection = (fallTarget - center).normalized;
                 coroutines.Add(StartCoroutine(currentUnit.FallAndScatter(fallTarget, 4f, scatterDirection)));
             }
             else
             {
-                coroutines.Add(currentUnit.MoveTo(targetPos, 3f));
+                coroutines.Add(StartCoroutine(currentUnit.MoveTo(targetPos, 3f)));
             }
 
             coroutines.Add(currentUnit.RotateTo(lookDir));
@@ -849,7 +873,6 @@ public class PlayerController : MonoBehaviour
 
     void MoveSelectedUnits()
     {
-        Debug.Log($"[Debug] Move command received. Selected Units: {selectedUnits.Count}, Current Mode: {currentMode}");
         if (selectedUnits.Count == 0) return;
         Ray ray = cam.ScreenPointToRay(Mouse.current.position.ReadValue());
         RaycastHit hit;
@@ -874,7 +897,7 @@ public class PlayerController : MonoBehaviour
                 {
                     if (slot.unit == null) continue;
                     Vector3 targetPos = newCenter + slot.offset;
-                    slot.unit.MoveTo(targetPos);
+                    StartCoroutine(slot.unit.MoveTo(targetPos));
                 }
             }
             else // Individual mode
@@ -899,7 +922,7 @@ public class PlayerController : MonoBehaviour
                         float z = Mathf.Sin(angle * i * Mathf.Deg2Rad) * radius;
                         targetPos = hit.point + new Vector3(x, 0, z);
                     }
-                    selectedUnits[i].MoveTo(targetPos);
+                    StartCoroutine(selectedUnits[i].MoveTo(targetPos));
                 }
             }
         }
@@ -945,7 +968,7 @@ public class PlayerController : MonoBehaviour
         switch (currentMode)
         {
             case FormationMode.Cluster:
-                if (selectedUnits.Count > 0) formationCoroutines = UpdateFormation(FormationMode.Individual);
+                if (selectedUnits.Count > 0) formationCoroutines = UpdateFormation(FormationMode.Individual, null);
                 break;
             case FormationMode.Solid:
                 if (selectedUnits.Count > 1) formationCoroutines = Update3DFormation(FormationMode.Individual);

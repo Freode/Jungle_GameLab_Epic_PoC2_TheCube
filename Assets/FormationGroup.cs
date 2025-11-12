@@ -69,7 +69,7 @@ public class FormationGroup : MonoBehaviour
                     }
                 }
 
-                if (ungroundedUnits.Count > 0)
+                if (AreAllUnitsUngrounded())
                 {
                     // 1. Let ungrounded units continue to fall (they are already in Individual mode or will be set to it)
                     foreach (var unit in ungroundedUnits)

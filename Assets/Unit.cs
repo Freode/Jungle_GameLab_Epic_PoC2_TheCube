@@ -46,7 +46,7 @@ public class Unit : MonoBehaviour
         rend.material.color = selected ? Color.green : Color.white;
     }
 
-    public Coroutine MoveTo(Vector3 position, float speedMultiplier = 1f)
+    public IEnumerator MoveTo(Vector3 position, float speedMultiplier = 1f)
     {
         if (agent.enabled) // Only use NavMeshAgent if it's enabled
         {
@@ -57,22 +57,23 @@ public class Unit : MonoBehaviour
             agent.speed = originalSpeed * speedMultiplier;
             agent.acceleration = originalAcceleration * speedMultiplier;
             
+            agent.ResetPath(); // Explicitly clear any previous path
             agent.SetDestination(position);
 
             if (speedMultiplier > 1f)
             {
-                return StartCoroutine(ResetSpeedAndStoppingDistanceAfterArrival()); // New coroutine
+                yield return StartCoroutine(ResetSpeedAndStoppingDistanceAfterArrival()); // New coroutine
             }
             else
             {
                 // If not using speed multiplier, still need to reset stopping distance
-                return StartCoroutine(ResetStoppingDistanceAfterArrival()); // New coroutine
+                yield return StartCoroutine(ResetStoppingDistanceAfterArrival()); // New coroutine
             }
         }
         else // Smoothly move to position if NavMeshAgent is disabled
         {
             StopAllCoroutines(); // Stop any previous movement coroutine
-            return StartCoroutine(SmoothMoveCoroutine(position, speedMultiplier));
+            yield return StartCoroutine(SmoothMoveCoroutine(position, speedMultiplier));
         }
     }
 
@@ -182,40 +183,41 @@ public class Unit : MonoBehaviour
 
     public IEnumerator FallAndScatter(Vector3 targetPosition, float speedMultiplier, Vector3 scatterDirection)
     {
-        EnableNavMeshAgent(false); // Ensure NavMeshAgent is disabled for direct transform manipulation
+        EnableNavMeshAgent(false);
         SetNavMeshAgentControl(false);
 
-        float currentSpeed = originalSpeed * speedMultiplier;
+        Vector3 startPosition = transform.position;
+        float horizontalDistance = Vector3.Distance(new Vector3(startPosition.x, 0, startPosition.z), new Vector3(targetPosition.x, 0, targetPosition.z));
         
-        // Create a ground target position directly below the unit
-        Vector3 groundTarget = new Vector3(transform.position.x, 0.5f, transform.position.z); // Assuming cube pivot is center, 0.5f is ground level
+        // Adjust duration based on speed, but also consider vertical distance for a more natural fall time
+        float verticalDistance = Mathf.Abs(startPosition.y - targetPosition.y);
+        float duration = (horizontalDistance + verticalDistance) / (originalSpeed * speedMultiplier);
 
-        // Fall to the ground first
-        while (Vector3.Distance(transform.position, groundTarget) > 0.05f)
+        if (duration < 0.2f) duration = 0.2f; // Ensure a minimum duration for the animation to be visible
+
+        float time = 0;
+        float startY = startPosition.y;
+        float targetY = targetPosition.y;
+
+        while (time < duration)
         {
-            transform.position = Vector3.MoveTowards(transform.position, groundTarget, currentSpeed * 2 * Time.deltaTime); // Fall faster
+            time += Time.deltaTime;
+            float t = time / duration;
+
+            // Interpolate XZ position linearly
+            Vector3 newPos = Vector3.Lerp(new Vector3(startPosition.x, 0, startPosition.z), new Vector3(targetPosition.x, 0, targetPosition.z), t);
+            
+            // Interpolate Y position with an ease-in curve to simulate acceleration
+            float y_t = t * t; // Ease-in curve (t-squared)
+            newPos.y = Mathf.Lerp(startY, targetY, y_t);
+
+            transform.position = newPos;
             yield return null;
         }
-        transform.position = groundTarget;
 
-        // Then move to the final scatter position on the ground
-        while (Vector3.Distance(transform.position, targetPosition) > 0.05f)
-        {
-            transform.position = Vector3.MoveTowards(transform.position, targetPosition, currentSpeed * Time.deltaTime);
-            yield return null;
-        }
         transform.position = targetPosition;
+        yield return null; 
 
-        // NEW: Move 1 unit further in the scatter direction after reaching the target position
-        Vector3 finalPushTarget = targetPosition + scatterDirection.normalized * CUBE_SIZE;
-        while (Vector3.Distance(transform.position, finalPushTarget) > 0.05f)
-        {
-            transform.position = Vector3.MoveTowards(transform.position, finalPushTarget, currentSpeed * Time.deltaTime);
-            yield return null;
-        }
-        transform.position = finalPushTarget;
-
-        // Once scattered, re-enable NavMeshAgent
         EnableNavMeshAgent(true);
         SetNavMeshAgentControl(true);
         UnlockRotation();
@@ -259,7 +261,7 @@ public class Unit : MonoBehaviour
     }
 
     public bool IsLeader { get; set; } = false;
-    private Unit _leader;
+    [SerializeField] private Unit _leader;
     private Vector3 _offsetFromLeader; // Offset from leader's position
 
     public void SetLeader(Unit leader, Vector3 offset)

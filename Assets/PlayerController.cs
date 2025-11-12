@@ -74,7 +74,6 @@ public class PlayerController : MonoBehaviour
         // At the start, all units are in the group for individual fall checks
         if (formationGroup != null)
         {
-            formationGroup.units.AddRange(units);
             formationGroup.currentMode = FormationMode.Individual;
         }
 
@@ -220,6 +219,12 @@ public class PlayerController : MonoBehaviour
 
         // Immediately deselect the unit to remove it from the cluster
         DeselectUnit(topCube);
+
+        // Also remove from the formationGroup's units list
+        if (formationGroup != null && formationGroup.units.Contains(topCube))
+        {
+            formationGroup.units.Remove(topCube);
+        }
 
         // Skill execution is complete, player can now move other units.
         isExecutingSkill = false; 
@@ -521,6 +526,10 @@ public class PlayerController : MonoBehaviour
         if (newMode != FormationMode.Individual && currentMode == newMode) yield break;
 
         isSwitchingFormation = true;
+        if (formationGroup != null)
+        {
+            formationGroup.isTransitioning = true;
+        }
 
         FormationMode previousMode = currentMode;
         
@@ -537,16 +546,16 @@ public class PlayerController : MonoBehaviour
         {
             Debug.LogError("FormationGroup reference is not assigned in PlayerController. Please assign the FormationManager GameObject to the 'Formation Group' field in the Inspector.", this);
             isSwitchingFormation = false;
+            if (formationGroup != null)
+            {
+                formationGroup.isTransitioning = false;
+            }
             yield break;
         }
         
         formationGroup.currentMode = newMode;
         formationGroup.units.Clear();
-        if (newMode == FormationMode.Individual)
-        {
-            formationGroup.units.AddRange(this.units);
-        }
-        else
+        if (newMode != FormationMode.Individual)
         {
             formationGroup.units.AddRange(selectedUnits);
         }
@@ -568,6 +577,10 @@ public class PlayerController : MonoBehaviour
             selectedUnits.Clear(); // Clear the list
 
             isSwitchingFormation = false;
+            if (formationGroup != null)
+            {
+                formationGroup.isTransitioning = false;
+            }
             yield break;
         }
 
@@ -594,6 +607,10 @@ public class PlayerController : MonoBehaviour
         }
 
         isSwitchingFormation = false;
+        if (formationGroup != null)
+        {
+            formationGroup.isTransitioning = false;
+        }
     }
 
     void CleanupPreviousFormation(FormationMode modeToBreak)

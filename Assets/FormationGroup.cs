@@ -13,6 +13,7 @@ public class FormationGroup : MonoBehaviour
 {
     public List<Unit> units = new List<Unit>();
     public FormationMode currentMode = FormationMode.Individual;
+    public bool isTransitioning = false;
 
     // Helper method to check if all units in the group are ungrounded
     private bool AreAllUnitsUngrounded()
@@ -45,6 +46,7 @@ public class FormationGroup : MonoBehaviour
 
     void Update()
     {
+        if (isTransitioning) return;
         if (units.Count == 0) return;
 
         bool shouldFall = false;
@@ -141,7 +143,18 @@ public class FormationGroup : MonoBehaviour
 
                 if (bottomUnit != null && !bottomUnit.IsGrounded)
                 {
-                    shouldFall = true;
+                    // 사다리 모드에서 바닥 유닛이 ungrounded 상태가 되면,
+                    // 사다리 포메이션을 해체하고 유닛들을 개별 모드로 전환하여 각자 낙하하도록 처리
+                    List<Unit> unitsToDisband = new List<Unit>(units); // 현재 포메이션의 모든 유닛 복사
+                    units.Clear(); // FormationGroup의 units 리스트 비우기
+                    currentMode = FormationMode.Individual; // FormationGroup 모드를 Individual로 변경
+
+                    if (PlayerController.instance != null)
+                    {
+                        // PlayerController를 통해 포메이션 해체 및 유닛들 개별 모드로 전환
+                        PlayerController.instance.DisbandFormationWithoutAnimation(unitsToDisband);
+                    }
+                    // 이 경우, 개별 유닛들은 각자의 Update()에서 IsGrounded 상태에 따라 Fall()을 호출하게 됨.
                 }
                 break;
         }

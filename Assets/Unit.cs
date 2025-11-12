@@ -50,11 +50,13 @@ public class Unit : MonoBehaviour
     {
         if (agent.enabled) // Only use NavMeshAgent if it's enabled
         {
+            StopAllCoroutines(); // Stop any previous movement coroutines, including Reset...AfterArrival
+            agent.stoppingDistance = originalStoppingDistance; // Ensure stopping distance is reset immediately
+            agent.isStopped = false; // Explicitly ensure the agent is not stopped
+            
             agent.speed = originalSpeed * speedMultiplier;
             agent.acceleration = originalAcceleration * speedMultiplier;
             
-            // Temporarily set stopping distance to a very small value
-            agent.stoppingDistance = 0.01f; 
             agent.SetDestination(position);
 
             if (speedMultiplier > 1f)
@@ -285,10 +287,9 @@ public class Unit : MonoBehaviour
             transform.rotation = Quaternion.RotateTowards(transform.rotation, _leader.transform.rotation, agent.angularSpeed * Time.deltaTime); // Match leader's rotation
         }
         
-        CheckGroundedStatus();
-
         if (currentMode == FormationMode.Individual)
         {
+            CheckGroundedStatus();
             if (!IsGrounded)
             {
                 Fall();
@@ -329,8 +330,7 @@ public class Unit : MonoBehaviour
         AreAllCornersGrounded = groundedCorners == corners.Count;
         
         // This part handles re-enabling the agent if it was falling but is now grounded again.
-        // It should only run in individual mode to avoid conflicts with formation logic.
-        if (IsGrounded && currentMode == FormationMode.Individual)
+        if (IsGrounded)
         {
             if (!agent.enabled)
             {

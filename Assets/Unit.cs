@@ -166,12 +166,21 @@ public class Unit : MonoBehaviour
         agent.updateRotation = true;
     }
 
+    private Vector3 _lastKnownVelocity;
+
     public void EnableNavMeshAgent(bool enable)
     {
+        if (!enable && agent.enabled)
+        {
+            _lastKnownVelocity = agent.velocity;
+        }
+        
         agent.enabled = enable;
+
         if (enable)
         {
             agent.Warp(transform.position); // Force agent to snap to current position on NavMesh
+            agent.velocity = _lastKnownVelocity; // Restore velocity for smoother transition
         }
     }
 

@@ -7,11 +7,12 @@ TagManager:
   - Unit
   - Ground
   - Border
+  - Enemy
   layers:
   - Default
   - TransparentFX
   - Ignore Raycast
-  - 
+  - Ignore Baked
   - Water
   - UI
   - 
